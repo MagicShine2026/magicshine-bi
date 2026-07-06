@@ -1,8 +1,11 @@
 APP_NAME = "Magic Shine BI"
 MODULE_NAME = "Retail Intelligence · Autoplanet"
-VERSION = "v0.1 ETL"
+VERSION = "v0.2 Dashboard Ejecutivo"
 
 BRAND_COLOR = "#007A78"
 DARK_COLOR = "#0F3D4A"
 ACCENT_COLOR = "#FFB000"
 LIGHT_BG = "#F7F9FB"
+WARNING_COLOR = "#B45309"
+DANGER_COLOR = "#B91C1C"
+SUCCESS_COLOR = "#0F766E"

@@ -1,42 +1,31 @@
 # Magic Shine BI
 
 **Módulo:** Retail Intelligence · Autoplanet  
-**Versión:** v0.1 ETL
+**Versión:** v0.2 Dashboard Ejecutivo
 
-Esta versión contiene el primer módulo funcional: motor de carga, normalización y control de calidad de datos para Sell Out Autoplanet y activaciones/promotores.
+Esta versión mantiene el motor ETL de v0.1 y agrega dashboard comercial para análisis ejecutivo de ventas, activaciones y trabajo en terreno.
 
-## Qué hace esta versión
+## Qué incluye
 
-- Carga múltiples archivos Excel de Sell Out desde la interfaz de Streamlit.
-- Detecta automáticamente mes y año del archivo.
-- Encuentra la fila de encabezado aunque el reporte tenga portada o filas iniciales distintas.
-- Convierte la matriz diaria de Autoplanet a una tabla analítica en formato largo.
-- Carga el archivo de promotores/activaciones.
-- Cruza ventas y activaciones por `tienda_codigo + fecha`.
-- Muestra control de calidad de la carga.
-- Permite descargar la tabla maestra normalizada en CSV.
+- Carga múltiple de archivos Sell Out Autoplanet desde la interfaz.
+- Carga de archivo Promotores / Activaciones.
+- Normalización automática de datos.
+- KPIs ejecutivos: venta, unidades, tiendas, SKUs, venta/unidad.
+- Comparación mensual automática.
+- Gráficos de venta mensual, diaria, por tienda, producto, categoría y día de semana.
+- Rankings: top tiendas, bottom tiendas, top productos, ranking por día y crecimiento por tienda.
+- Cruce con activaciones: venta con/sin actividad y variación mensual de tiendas trabajadas vs no trabajadas.
+- Pestaña KPIs Sebastián / trabajo en terreno.
+- Control de calidad de datos e incidencias.
+- Descargas CSV.
 
-## Estructura
+## Seguridad de datos
 
-```text
-magicshine-bi/
-├── app.py
-├── config.py
-├── requirements.txt
-├── README.md
-├── .gitignore
-├── .streamlit/
-│   └── config.toml
-├── data/
-│   └── .gitkeep
-└── utils/
-    ├── __init__.py
-    └── data_engine.py
-```
+No subas Excel comerciales al repositorio. La app procesa los archivos en memoria desde el navegador.
+
+El `.gitignore` evita subir archivos `.xlsx`, `.xls` y `.xlsm`.
 
 ## Publicación en Streamlit
-
-Configuración recomendada:
 
 | Campo | Valor |
 |---|---|
@@ -44,12 +33,12 @@ Configuración recomendada:
 | Branch | `main` |
 | Main file path | `app.py` |
 
-## Seguridad de datos
+## Nota sobre KPIs Sebastián
 
-No subas los Excel comerciales al repositorio. La app usa carga directa desde navegador y procesa los archivos en memoria.
+El archivo actual de promotores no trae una columna explícita de responsable. Esta versión mide trabajo de terreno por códigos de actividad:
 
-El `.gitignore` está configurado para evitar subir archivos `.xlsx`, `.xls` y `.xlsm`.
+- `VC`, `VCG`, `G`: visita comercial.
+- `MS`, `AM`, `PM` en días distintos de sábado: activación de terreno semana.
+- `MS` sábado: activación sábado.
 
-## Próximo módulo
-
-v0.2: Dashboard ejecutivo y análisis comparativo Mayo vs Junio con rankings comerciales.
+Para atribución directa a Sebastián, el siguiente formato debería incluir una columna `Responsable` o `Ejecutor`.
