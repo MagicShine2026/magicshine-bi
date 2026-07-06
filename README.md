@@ -1,9 +1,15 @@
 # Magic Shine BI
 
 **Módulo:** Retail Intelligence · Autoplanet  
-**Versión:** v0.2 Dashboard Ejecutivo
+**Versión:** v0.2.2 Hotfix fechas
 
 Esta versión mantiene el motor ETL de v0.1 y agrega dashboard comercial para análisis ejecutivo de ventas, activaciones y trabajo en terreno.
+
+## Hotfix v0.2.2
+
+- Mantiene la corrección visual de tarjetas KPI de v0.2.1.
+- Corrige el gráfico **Venta mensual** para que el eje X trate los meses como categorías (`2026-05`, `2026-06`) y no como fechas continuas con ticks automáticos desde abril.
+- Elimina archivos temporales `__pycache__` del paquete de entrega.
 
 ## Qué incluye
 

@@ -50,21 +50,20 @@ st.markdown(
 
 
 def kpi_card(label: str, value: str, note: str = "", trend: str | None = None, positive: bool | None = None) -> None:
+    """Renderiza una tarjeta KPI sin saltos/indentación que Streamlit pueda interpretar como código."""
     trend_html = ""
     if trend is not None:
         cls = "kpi-positive" if positive else "kpi-negative" if positive is False else "kpi-note"
         trend_html = f'<div class="{cls}">{trend}</div>'
-    st.markdown(
-        f"""
-        <div class="ms-card">
-            <div class="kpi-label">{label}</div>
-            <div class="kpi-value">{value}</div>
-            {trend_html}
-            <div class="kpi-note">{note}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    html = (
+        f'<div class="ms-card">'
+        f'<div class="kpi-label">{label}</div>'
+        f'<div class="kpi-value">{value}</div>'
+        f'{trend_html}'
+        f'<div class="kpi-note">{note}</div>'
+        f'</div>'
     )
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def fmt_table(df: pd.DataFrame, money_cols: list[str] | None = None, int_cols: list[str] | None = None, pct_cols: list[str] | None = None) -> pd.DataFrame:
@@ -215,9 +214,16 @@ with tab_exec:
     with c1:
         ms = monthly_summary(filtered)
         if not ms.empty:
-            fig = px.bar(ms, x="mes", y="venta", text_auto=".2s", title="Venta mensual")
+            ms = ms.copy()
+            ms["mes_label"] = ms["mes"].astype(str)
+            fig = px.bar(ms, x="mes_label", y="venta", text_auto=".2s", title="Venta mensual")
             fig.update_traces(marker_color=BRAND_COLOR)
-            fig.update_layout(height=370, margin=dict(l=10, r=10, t=60, b=10))
+            fig.update_layout(
+                height=370,
+                margin=dict(l=10, r=10, t=60, b=10),
+                xaxis_title="Mes",
+                xaxis_type="category",
+            )
             st.plotly_chart(fig, use_container_width=True)
     with c2:
         ws = weekday_ranking(filtered)

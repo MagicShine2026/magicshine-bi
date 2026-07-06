@@ -1,6 +1,6 @@
 APP_NAME = "Magic Shine BI"
 MODULE_NAME = "Retail Intelligence · Autoplanet"
-VERSION = "v0.2 Dashboard Ejecutivo"
+VERSION = "v0.2.2 Hotfix fechas"
 
 BRAND_COLOR = "#007A78"
 DARK_COLOR = "#0F3D4A"
