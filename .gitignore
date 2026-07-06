@@ -1,13 +1,21 @@
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
 *.pyd
 .env
 .venv
 venv/
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Sensitive / commercial data: never commit real Excel files
 *.xlsx
 *.xls
 *.xlsm
 !data/.gitkeep
+
+# Streamlit secrets
 .streamlit/secrets.toml

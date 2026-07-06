@@ -1,6 +1,8 @@
 APP_NAME = "Magic Shine BI"
-MODULE_NAME = "Autoplanet Sell Out"
+MODULE_NAME = "Retail Intelligence · Autoplanet"
+VERSION = "v0.1 ETL"
+
 BRAND_COLOR = "#007A78"
 DARK_COLOR = "#0F3D4A"
 ACCENT_COLOR = "#FFB000"
-CURRENCY_PREFIX = "$"
+LIGHT_BG = "#F7F9FB"
