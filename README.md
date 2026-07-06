@@ -1,50 +1,50 @@
-# Magic Shine BI
+# Magic Shine BI — v0.3.1
 
-**Módulo:** Retail Intelligence · Autoplanet  
-**Versión:** v0.2.2 Hotfix fechas
+Módulo Retail Intelligence · Autoplanet.
 
-Esta versión mantiene el motor ETL de v0.1 y agrega dashboard comercial para análisis ejecutivo de ventas, activaciones y trabajo en terreno.
+## Qué incorpora esta versión
 
-## Hotfix v0.2.2
+- Lectura de hoja `Diccionario` o `Diccionario_Actividades` dentro del archivo de promotores.
+- Clasificación automática de códigos de actividad sin depender de colores de celda.
+- Separación entre:
+  - Activación Agencia
+  - Activación Sebastián
+  - Visita Sebastián
+  - Visita con incentivo
+  - Activación cancelada
+  - Tienda cerrada
+- KPIs de Sebastián calculados desde el diccionario:
+  - Visitas
+  - Activaciones de lunes a viernes
+  - Activaciones sábado
+  - Cumplimiento semanal de 4 activaciones sin contar sábado
+- Nuevos campos en la tabla de activaciones:
+  - `tipo_actividad`
+  - `estado_actividad`
+  - `ejecutor`
+  - `cuenta_activacion`
+  - `kpi_sebastian`
+  - `kpi_agencia`
+  - `actividad_valida`
 
-- Mantiene la corrección visual de tarjetas KPI de v0.2.1.
-- Corrige el gráfico **Venta mensual** para que el eje X trate los meses como categorías (`2026-05`, `2026-06`) y no como fechas continuas con ticks automáticos desde abril.
-- Elimina archivos temporales `__pycache__` del paquete de entrega.
+## Estructura esperada del archivo de promotores
 
-## Qué incluye
+Hojas aceptadas:
 
-- Carga múltiple de archivos Sell Out Autoplanet desde la interfaz.
-- Carga de archivo Promotores / Activaciones.
-- Normalización automática de datos.
-- KPIs ejecutivos: venta, unidades, tiendas, SKUs, venta/unidad.
-- Comparación mensual automática.
-- Gráficos de venta mensual, diaria, por tienda, producto, categoría y día de semana.
-- Rankings: top tiendas, bottom tiendas, top productos, ranking por día y crecimiento por tienda.
-- Cruce con activaciones: venta con/sin actividad y variación mensual de tiendas trabajadas vs no trabajadas.
-- Pestaña KPIs Sebastián / trabajo en terreno.
-- Control de calidad de datos e incidencias.
-- Descargas CSV.
+- `Consolidado`
+- `Diccionario` o `Diccionario_Actividades`
 
-## Seguridad de datos
+Columnas mínimas del diccionario:
 
-No subas Excel comerciales al repositorio. La app procesa los archivos en memoria desde el navegador.
+| Abreviatura | Marca | Detalle | Horario | Ejecutor |
+|---|---|---|---|---|
+| MS | MagicShine | Activación full día | 10:00 - 18:00 | Agencia |
+| MSC | MagicShine | Activación full día programada y cancelada | 10:00 - 18:00 | Agencia |
+| MSH | MagicShine | Activación de mediodía | 14:30 - 18:30 | Sebastián |
+| MSHG | MagicShine | Activación de mediodía + galletas de regalo | 14:30 - 18:30 | Sebastián |
+| VC | MagicShine | Visita comercial |  | Sebastián |
+| VCG | MagicShine | Visita comercial + galletas de regalo |  | Sebastián |
 
-El `.gitignore` evita subir archivos `.xlsx`, `.xls` y `.xlsm`.
+## Seguridad
 
-## Publicación en Streamlit
-
-| Campo | Valor |
-|---|---|
-| Repository | `MagicShine2026/magicshine-bi` |
-| Branch | `main` |
-| Main file path | `app.py` |
-
-## Nota sobre KPIs Sebastián
-
-El archivo actual de promotores no trae una columna explícita de responsable. Esta versión mide trabajo de terreno por códigos de actividad:
-
-- `VC`, `VCG`, `G`: visita comercial.
-- `MS`, `AM`, `PM` en días distintos de sábado: activación de terreno semana.
-- `MS` sábado: activación sábado.
-
-Para atribución directa a Sebastián, el siguiente formato debería incluir una columna `Responsable` o `Ejecutor`.
+Los Excel se cargan desde la app y se procesan en memoria. No se guardan en GitHub.

@@ -14,6 +14,10 @@ from utils.analytics import (
     category_summary,
     daily_sales,
     field_visit_kpis,
+    store_activation_effect,
+    activation_calendar_matrix,
+    sebastian_scorecard,
+    executive_action_plan,
     growth_by_store,
     integer,
     kpi_summary,
@@ -88,7 +92,7 @@ def load_data_cached(sellout_files, promoter_file):
 
 
 st.title(APP_NAME)
-st.caption(f"{MODULE_NAME} · {VERSION}")
+st.caption(f"{MODULE_NAME} · v0.3.1 Diccionario de actividades y KPIs terreno")
 
 with st.sidebar:
     st.header("📂 Carga de datos")
@@ -155,10 +159,13 @@ with st.sidebar:
 
     selected_weekdays = st.multiselect("Día semana", WEEKDAY_ORDER, default=[])
 
-    selected_activation = st.multiselect("Activación", ["Sí", "No"], default=[])
+    selected_activation = st.multiselect("Activación ejecutada", ["Sí", "No"], default=[])
 
     activity_names = sorted([x for x in master["activacion_nombre"].dropna().unique().tolist() if x])
-    selected_activity = st.multiselect("Tipo actividad", activity_names, default=[])
+    selected_activity = st.multiselect("Detalle actividad", activity_names, default=[])
+
+    executors = sorted([x for x in master.get("ejecutor", pd.Series(dtype=str)).dropna().unique().tolist() if x])
+    selected_executors = st.multiselect("Ejecutor", executors, default=[])
 
 filtered = master.copy()
 if selected_months:
@@ -175,6 +182,8 @@ if selected_activation:
     filtered = filtered[filtered["activacion"].isin(selected_activation)]
 if selected_activity:
     filtered = filtered[filtered["activacion_nombre"].isin(selected_activity)]
+if selected_executors:
+    filtered = filtered[filtered["ejecutor"].isin(selected_executors)]
 
 summary = kpi_summary(filtered)
 comparison = latest_month_comparison(filtered)
@@ -195,12 +204,13 @@ with k5:
 
 st.divider()
 
-tab_exec, tab_sales, tab_rankings, tab_activation, tab_sebastian, tab_quality, tab_download = st.tabs([
+tab_exec, tab_sales, tab_rankings, tab_activation, tab_sebastian, tab_plan, tab_quality, tab_download = st.tabs([
     "📊 Resumen ejecutivo",
     "📈 Ventas",
     "🏆 Rankings",
     "🎯 Activaciones",
     "👤 KPIs Sebastián",
+    "🧭 Plan comercial",
     "🧱 Calidad de datos",
     "⬇️ Descargas",
 ])
@@ -309,9 +319,9 @@ with tab_activation:
         c1, c2 = st.columns(2)
         with c1:
             act_summary = activation_summary(filtered)
-            st.markdown("#### Venta con vs sin actividad")
+            st.markdown("#### Venta con vs sin activación ejecutada")
             st.dataframe(fmt_table(act_summary, money_cols=["venta", "venta_promedio_dia", "venta_unidad"], int_cols=["unidades", "registros", "dias", "tiendas"]), use_container_width=True, hide_index=True)
-            fig = px.bar(act_summary, x="activacion", y="venta", text_auto=".2s", title="Venta con vs sin activación/visita")
+            fig = px.bar(act_summary, x="activacion", y="venta", text_auto=".2s", title="Venta con vs sin activación ejecutada")
             fig.update_traces(marker_color=BRAND_COLOR)
             fig.update_layout(height=360)
             st.plotly_chart(fig, use_container_width=True)
@@ -327,50 +337,136 @@ with tab_activation:
                 fig.update_layout(height=360)
                 st.plotly_chart(fig, use_container_width=True)
 
+        st.markdown("#### Impacto por tienda vs benchmark de tiendas no trabajadas")
+        store_effect = store_activation_effect(filtered, activations)
+        if store_effect.empty:
+            st.info("Se requieren al menos dos meses de venta para estimar uplift por tienda.")
+        else:
+            c3, c4 = st.columns([1, 1])
+            with c3:
+                st.markdown("**Top uplift estimado**")
+                st.dataframe(
+                    fmt_table(
+                        store_effect.head(10),
+                        money_cols=["venta_anterior", "venta_actual", "var_venta", "venta_esperada", "uplift_estimado"],
+                        int_cols=["actividades", "visitas", "activaciones_semana", "activaciones_sabado", "unidades_anterior", "unidades_actual", "var_unidades"],
+                        pct_cols=["var_venta_pct", "benchmark_no_trabajadas_pct"],
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            with c4:
+                st.markdown("**Tiendas trabajadas con uplift negativo**")
+                neg = store_effect[(store_effect["tienda_trabajada"] == "Sí") & (store_effect["uplift_estimado"] <= 0)].sort_values("uplift_estimado").head(10)
+                st.dataframe(
+                    fmt_table(
+                        neg,
+                        money_cols=["venta_anterior", "venta_actual", "var_venta", "venta_esperada", "uplift_estimado"],
+                        int_cols=["actividades", "visitas", "activaciones_semana", "activaciones_sabado"],
+                        pct_cols=["var_venta_pct", "benchmark_no_trabajadas_pct"],
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+            plot_df = store_effect.sort_values("uplift_estimado", ascending=False).head(15).sort_values("uplift_estimado")
+            if not plot_df.empty:
+                fig = px.bar(plot_df, y="tienda", x="uplift_estimado", color="tienda_trabajada", orientation="h", title="Top 15 uplift estimado por tienda")
+                fig.update_layout(height=520, margin=dict(l=10, r=10, t=60, b=10))
+                st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("#### Calendario de actividades")
+        cal = activation_calendar_matrix(activations)
+        if not cal.empty:
+            fig = px.bar(cal, x="fecha", y="actividades", color="actividad_terreno", title="Actividades por fecha y tipo")
+            fig.update_layout(height=360, margin=dict(l=10, r=10, t=60, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+
         st.markdown("#### Actividades detectadas")
-        show = ["fecha", "dia_semana", "tienda_codigo", "tienda_promotores", "comuna", "zona", "activacion_codigo", "activacion_nombre", "detalle_archivo", "horario_archivo"]
+        show = ["fecha", "dia_semana", "tienda_codigo", "tienda_promotores", "comuna", "zona", "activacion_codigo", "activacion_nombre", "tipo_actividad", "estado_actividad", "ejecutor", "horario", "cuenta_activacion", "kpi_sebastian", "kpi_agencia"]
+        show = [c for c in show if c in activations.columns]
         st.dataframe(fmt_table(activations[show].sort_values(["fecha", "tienda_codigo"])), use_container_width=True, hide_index=True)
 
 with tab_sebastian:
     st.subheader("KPIs Sebastián / trabajo en terreno")
     st.markdown(
-        "<div class='risk-note'><b>Nota operacional:</b> el archivo actual no trae una columna explícita de responsable/promotor. "
-        "Por ahora esta pestaña mide trabajo de terreno usando códigos de actividad: VC/VCG/G como visita comercial y MS/AM/PM como activación. "
-        "Para medir 100% a Sebastián, el próximo archivo debe incluir columna <b>Responsable</b> o <b>Ejecutor</b>.</div>",
+        "<div class='section-note'><b>Lectura:</b> esta versión usa la hoja <b>Diccionario</b> del archivo de promotores para distinguir Agencia, Sebastián, visitas, activaciones, cancelaciones e incentivos. Ya no depende del color de las celdas.</div>",
         unsafe_allow_html=True,
     )
-    field = field_visit_kpis(activations, filtered)
-    fs = field["summary"]
-    c1, c2, c3, c4, c5 = st.columns(5)
+    score = sebastian_scorecard(activations, filtered)
+    fs = score["summary"]
+    status_color = {"Verde": "#0F766E", "Amarillo": "#B45309", "Rojo": "#B91C1C"}.get(fs.get("estado", ""), DARK_COLOR)
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     with c1:
-        kpi_card("Visitas comerciales", integer(fs["visitas"]), "Códigos VC / VCG / G")
+        kpi_card("Estado terreno", str(fs["estado"]), "Cumplimiento semanal", None, None)
     with c2:
-        kpi_card("Activaciones semana", integer(fs["activaciones_semana"]), "Excluye sábados")
+        kpi_card("Cumplimiento", pct(fs["cumplimiento_pct"]), "Meta: 4 activaciones/semana")
     with c3:
-        kpi_card("Activaciones sábado", integer(fs["activaciones_sabado"]), "Normalmente agencia / sábado")
+        kpi_card("Visitas", integer(fs["visitas"]), "KPI Sebastián")
     with c4:
-        kpi_card("Tiendas trabajadas", integer(fs["tiendas"]), "Locales únicos")
+        kpi_card("Activaciones semana", integer(fs["activaciones_semana"]), "Sebastián, no incluye sábado")
     with c5:
-        compliance = f"{fs['semanas_ok']} / {fs['semanas_total']}"
-        kpi_card("Semanas cumplen mínimo", compliance, "Meta: 4 activaciones semanales sin sábado", None, None)
+        kpi_card("Activaciones sábado", integer(fs["activaciones_sabado"]), "Agencia/Sebastián según diccionario")
+    with c6:
+        kpi_card("Tiendas trabajadas", integer(fs["tiendas"]), "Locales únicos")
 
-    st.markdown("#### Cumplimiento semanal")
-    weekly = field["weekly"]
-    if weekly.empty:
-        st.info("No hay actividades para medir.")
+    if fs["brecha_activaciones_semana"] > 0:
+        st.markdown(
+            f"<div class='risk-note'><b>Brecha operativa:</b> faltan {integer(fs['brecha_activaciones_semana'])} activaciones de lunes a viernes para cumplir 4 por semana en todas las semanas del período cargado.</div>",
+            unsafe_allow_html=True,
+        )
     else:
-        st.dataframe(fmt_table(weekly, int_cols=["visitas", "activaciones_semana", "activaciones_sabado", "tiendas", "actividades"]), use_container_width=True, hide_index=True)
-        fig = px.bar(weekly, x="semana", y=["visitas", "activaciones_semana", "activaciones_sabado"], barmode="group", title="Actividades por semana")
-        fig.update_layout(height=400)
-        st.plotly_chart(fig, use_container_width=True)
+        st.success("Cumplimiento semanal de activaciones de lunes a viernes dentro del estándar definido.")
 
-    st.markdown("#### Tiendas trabajadas y venta asociada")
-    by_store = field["by_store"]
-    if not by_store.empty:
-        st.dataframe(fmt_table(by_store, money_cols=["venta"], int_cols=["visitas", "activaciones_semana", "activaciones_sabado", "actividades", "unidades"]), use_container_width=True, hide_index=True)
+    c7, c8 = st.columns([0.95, 1.05])
+    with c7:
+        st.markdown("#### Cumplimiento semanal")
+        weekly = score["weekly"]
+        if weekly.empty:
+            st.info("No hay actividades para medir.")
+        else:
+            st.dataframe(fmt_table(weekly, int_cols=["visitas", "activaciones_semana", "activaciones_sabado", "tiendas", "actividades"]), use_container_width=True, hide_index=True)
+            fig = px.bar(weekly, x="semana", y=["visitas", "activaciones_semana", "activaciones_sabado"], barmode="group", title="Actividades por semana")
+            fig.update_layout(height=390, margin=dict(l=10, r=10, t=60, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+    with c8:
+        st.markdown("#### Tiendas trabajadas y venta asociada")
+        by_store = score["by_store"]
+        if not by_store.empty:
+            cols = [c for c in ["tienda_codigo", "tienda_promotores", "comuna", "zona", "visitas", "activaciones_semana", "activaciones_sabado", "actividades", "venta", "unidades", "primera_fecha", "ultima_fecha"] if c in by_store.columns]
+            st.dataframe(fmt_table(by_store[cols], money_cols=["venta"], int_cols=["visitas", "activaciones_semana", "activaciones_sabado", "actividades", "unidades"]), use_container_width=True, hide_index=True)
+            top_visit = by_store.sort_values("actividades", ascending=False).head(15).sort_values("actividades")
+            fig = px.bar(top_visit, y="tienda_promotores", x="actividades", orientation="h", title="Top tiendas por cantidad de actividades")
+            fig.update_traces(marker_color=BRAND_COLOR)
+            fig.update_layout(height=430, margin=dict(l=10, r=10, t=60, b=10))
+            st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("#### KPIs pendientes de incorporar con nueva fuente")
-    st.write("Contenido generado, bases de datos captadas, capacitación a vendedores, levantamiento de oportunidades y supervisión cualitativa requieren un archivo adicional de reporte de terreno.")
+    st.markdown("#### Lectura comercial")
+    st.write("El cargo exige visitas permanentes, activaciones en punto de venta, supervisión comercial y al menos 4 activaciones semanales sin contar sábados. Esta pestaña transforma ese estándar operativo en métricas de control semanal.")
+
+with tab_plan:
+    st.subheader("Plan comercial sugerido")
+    plan = executive_action_plan(filtered, activations)
+    plan_df = pd.DataFrame(plan)
+    st.dataframe(plan_df, use_container_width=True, hide_index=True)
+
+    st.markdown("#### Priorización por tienda")
+    effect = store_activation_effect(filtered, activations)
+    if effect.empty:
+        st.info("Se requieren al menos dos meses para generar priorización por tienda.")
+    else:
+        priority = effect.sort_values(["accion_sugerida", "uplift_estimado"], ascending=[True, False])
+        st.dataframe(
+            fmt_table(
+                priority,
+                money_cols=["venta_anterior", "venta_actual", "var_venta", "venta_esperada", "uplift_estimado"],
+                int_cols=["actividades", "visitas", "activaciones_semana", "activaciones_sabado", "unidades_anterior", "unidades_actual", "var_unidades"],
+                pct_cols=["var_venta_pct", "benchmark_no_trabajadas_pct"],
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
 
 with tab_quality:
     st.subheader("Calidad de datos")

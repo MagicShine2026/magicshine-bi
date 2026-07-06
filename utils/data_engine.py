@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable, Any
@@ -51,7 +52,8 @@ def clean_text(value: Any) -> str:
 
 def norm_key(value: Any) -> str:
     text = clean_text(value).upper()
-    text = text.replace("Ñ", "N")
+    # Remove accents while keeping Ñ as N for robust matching: Sebastián -> SEBASTIAN.
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
     return re.sub(r"[^A-Z0-9]", "", text)
 
 
@@ -342,6 +344,192 @@ def read_sellout_files(files: Iterable[Any]) -> tuple[pd.DataFrame, pd.DataFrame
     return sales, pd.DataFrame(reports), pd.DataFrame([i.__dict__ for i in issues])
 
 
+
+def truthy(value: Any, default: bool = False) -> bool:
+    text = norm_key(value)
+    if not text:
+        return default
+    return text in {"SI", "S", "YES", "Y", "TRUE", "VERDADERO", "1", "X"}
+
+
+def normalize_activity_code(value: Any) -> str:
+    text = clean_text(value).upper()
+    text = text.replace("Á", "A").replace("É", "E").replace("Í", "I").replace("Ó", "O").replace("Ú", "U")
+    return re.sub(r"[^A-Z0-9]", "", text)
+
+
+def infer_activity_fields(code: str, detalle: str = "", horario: str = "", ejecutor: str = "") -> dict[str, str]:
+    code_n = normalize_activity_code(code)
+    detail_n = norm_key(detalle)
+    ejecutor_clean = clean_text(ejecutor)
+    horario_clean = clean_text(horario)
+
+    if "CERR" in code_n or "CERR" in detail_n:
+        tipo = "No operativa"
+        estado = "Cerrada"
+    elif "CANCEL" in code_n or "CANCEL" in detail_n:
+        tipo = "Activación"
+        estado = "Cancelada"
+    elif "VISITA" in detail_n or code_n in {"VC", "VCG", "G"}:
+        tipo = "Visita con incentivo" if ("GALLET" in detail_n or code_n in {"VCG", "G"}) else "Visita"
+        estado = "Ejecutada"
+    elif "ACTIVACION" in detail_n or code_n in {"MS", "MSH", "MSHG", "AM", "PM"}:
+        tipo = "Activación con incentivo" if "GALLET" in detail_n or code_n == "MSHG" else "Activación"
+        estado = "Ejecutada"
+    else:
+        tipo = detalle or code_n or "Sin clasificar"
+        estado = "Ejecutada"
+
+    if "MEDIO" in detail_n or "MEDIODIA" in detail_n or "14" in horario_clean or code_n in {"MSH", "MSHG", "AM", "PM"}:
+        jornada = "Medio día"
+    elif "FULL" in detail_n or "10" in horario_clean or code_n == "MS":
+        jornada = "Full día"
+    else:
+        jornada = ""
+
+    ejecutor_n = norm_key(ejecutor_clean)
+    cuenta_activacion = "Sí" if tipo.startswith("Activación") and estado == "Ejecutada" else "No"
+    kpi_sebastian = "Sí" if "SEBASTIAN" in ejecutor_n and estado == "Ejecutada" and tipo != "No operativa" else "No"
+    kpi_agencia = "Sí" if "AGENCIA" in ejecutor_n and cuenta_activacion == "Sí" else "No"
+    actividad_valida = "Sí" if estado == "Ejecutada" and tipo != "No operativa" else "No"
+
+    return {
+        "codigo": code_n,
+        "marca": "MagicShine" if not clean_text(detalle) and code_n in {"MS", "MSC", "MSH", "MSHG", "VC", "VCG"} else "",
+        "detalle": clean_text(detalle) or classify_activation(code_n),
+        "horario": horario_clean,
+        "ejecutor": ejecutor_clean,
+        "tipo_actividad": tipo,
+        "estado_actividad": estado,
+        "cuenta_activacion": cuenta_activacion,
+        "kpi_sebastian": kpi_sebastian,
+        "kpi_agencia": kpi_agencia,
+        "jornada": jornada,
+        "actividad_valida": actividad_valida,
+    }
+
+
+def read_activity_dictionary(xls: pd.ExcelFile, source: str) -> tuple[dict[str, dict[str, str]], pd.DataFrame, list[FileIssue]]:
+    """Read activity dictionary from Diccionario/Diccionario_Actividades sheet.
+
+    The dictionary makes the dashboard independent from cell colours and allows reliable
+    attribution of Agency vs Sebastián activities.
+    """
+    issues: list[FileIssue] = []
+    default_rows = [
+        {"codigo": "MS", "marca": "MagicShine", "detalle": "Activación full día", "horario": "10:00 - 18:00", "ejecutor": "Agencia"},
+        {"codigo": "MSC", "marca": "MagicShine", "detalle": "Activación full día programada y cancelada", "horario": "10:00 - 18:00", "ejecutor": "Agencia"},
+        {"codigo": "MSH", "marca": "MagicShine", "detalle": "Activación de mediodía", "horario": "14:30 - 18:30", "ejecutor": "Sebastián"},
+        {"codigo": "MSHG", "marca": "MagicShine", "detalle": "Activación de mediodía + galletas de regalo", "horario": "14:30 - 18:30", "ejecutor": "Sebastián"},
+        {"codigo": "VC", "marca": "MagicShine", "detalle": "Visita comercial", "horario": "", "ejecutor": "Sebastián"},
+        {"codigo": "VCG", "marca": "MagicShine", "detalle": "Visita comercial + galletas de regalo", "horario": "", "ejecutor": "Sebastián"},
+        {"codigo": "CERRADA", "marca": "", "detalle": "Tienda cerrada", "horario": "", "ejecutor": ""},
+    ]
+
+    sheet_name = None
+    for candidate in xls.sheet_names:
+        if norm_key(candidate) in {"DICCIONARIO", "DICCIONARIOACTIVIDADES", "DICCIONARIODEACTIVIDADES"}:
+            sheet_name = candidate
+            break
+
+    rows: list[dict[str, str]] = []
+    if sheet_name is None:
+        issues.append(FileIssue(source, "Diccionario", "Advertencia", "No se encontró hoja Diccionario. Se usaron reglas internas de respaldo."))
+        rows = default_rows
+    else:
+        raw = pd.read_excel(xls, sheet_name=sheet_name, header=None)
+        header_row = None
+        for idx in range(min(20, len(raw))):
+            joined = " | ".join(clean_text(x).lower() for x in raw.iloc[idx].tolist())
+            if "abreviatura" in joined and "detalle" in joined and "ejecutor" in joined:
+                header_row = idx
+                break
+        if header_row is None:
+            issues.append(FileIssue(source, "Diccionario", "Advertencia", f"La hoja {sheet_name} no tiene encabezado reconocible. Se usaron reglas internas de respaldo."))
+            rows = default_rows
+        else:
+            header = [norm_key(x) for x in raw.iloc[header_row].tolist()]
+            def col(names: list[str]) -> int | None:
+                targets = {norm_key(n) for n in names}
+                for i, h in enumerate(header):
+                    if h in targets:
+                        return i
+                return None
+            code_col = col(["Abreviatura", "Codigo", "Código", "Code"])
+            marca_col = col(["Marca"])
+            detalle_col = col(["Detalle", "Descripcion", "Descripción"])
+            horario_col = col(["Horario"])
+            ejecutor_col = col(["Ejecutor", "Responsable", "Promotor"])
+            tipo_col = col(["Tipo Actividad", "Tipo"])
+            estado_col = col(["Estado"])
+            cuenta_col = col(["Cuenta Activacion", "Cuenta Activación"])
+            kpi_seb_col = col(["KPI Sebastian", "KPI Sebastián", "Cuenta KPI Sebastian", "Cuenta KPI Sebastián"])
+            kpi_ag_col = col(["KPI Agencia", "Cuenta KPI Agencia"])
+            jornada_col = col(["Jornada"])
+
+            if code_col is None:
+                issues.append(FileIssue(source, "Diccionario", "Advertencia", "La hoja Diccionario no tiene columna Abreviatura. Se usaron reglas internas de respaldo."))
+                rows = default_rows
+            else:
+                blank_streak = 0
+                for _, row in raw.iloc[header_row + 1:].iterrows():
+                    code = normalize_activity_code(row.iloc[code_col] if code_col < len(row) else "")
+                    if not code:
+                        blank_streak += 1
+                        if blank_streak >= 3 and rows:
+                            break
+                        continue
+                    blank_streak = 0
+                    detalle = clean_text(row.iloc[detalle_col]) if detalle_col is not None and detalle_col < len(row) else ""
+                    horario = clean_text(row.iloc[horario_col]) if horario_col is not None and horario_col < len(row) else ""
+                    ejecutor = clean_text(row.iloc[ejecutor_col]) if ejecutor_col is not None and ejecutor_col < len(row) else ""
+                    inferred = infer_activity_fields(code, detalle, horario, ejecutor)
+                    rec = {
+                        **inferred,
+                        "codigo": code,
+                        "marca": clean_text(row.iloc[marca_col]) if marca_col is not None and marca_col < len(row) else inferred.get("marca", ""),
+                        "detalle": detalle or inferred["detalle"],
+                        "horario": horario or inferred["horario"],
+                        "ejecutor": ejecutor or inferred["ejecutor"],
+                    }
+                    if tipo_col is not None and tipo_col < len(row) and clean_text(row.iloc[tipo_col]):
+                        rec["tipo_actividad"] = clean_text(row.iloc[tipo_col])
+                    if estado_col is not None and estado_col < len(row) and clean_text(row.iloc[estado_col]):
+                        rec["estado_actividad"] = clean_text(row.iloc[estado_col])
+                    if cuenta_col is not None and cuenta_col < len(row):
+                        rec["cuenta_activacion"] = "Sí" if truthy(row.iloc[cuenta_col], rec["cuenta_activacion"] == "Sí") else "No"
+                    if kpi_seb_col is not None and kpi_seb_col < len(row):
+                        rec["kpi_sebastian"] = "Sí" if truthy(row.iloc[kpi_seb_col], rec["kpi_sebastian"] == "Sí") else "No"
+                    if kpi_ag_col is not None and kpi_ag_col < len(row):
+                        rec["kpi_agencia"] = "Sí" if truthy(row.iloc[kpi_ag_col], rec["kpi_agencia"] == "Sí") else "No"
+                    if jornada_col is not None and jornada_col < len(row) and clean_text(row.iloc[jornada_col]):
+                        rec["jornada"] = clean_text(row.iloc[jornada_col])
+                    rec["actividad_valida"] = "Sí" if rec.get("estado_actividad") == "Ejecutada" and rec.get("tipo_actividad") != "No operativa" else "No"
+                    rows.append(rec)
+
+    mapping: dict[str, dict[str, str]] = {}
+    clean_rows: list[dict[str, str]] = []
+    for row in rows:
+        code = normalize_activity_code(row.get("codigo", ""))
+        if not code:
+            continue
+        row = {**infer_activity_fields(code, row.get("detalle", ""), row.get("horario", ""), row.get("ejecutor", "")), **row, "codigo": code}
+        if code in mapping:
+            issues.append(FileIssue(source, "Diccionario", "Advertencia", f"Código duplicado en diccionario: {code}. Se usó la primera definición."))
+            continue
+        mapping[code] = row
+        clean_rows.append(row)
+
+    dictionary_df = pd.DataFrame(clean_rows)
+    return mapping, dictionary_df, issues
+
+
+def activity_from_code(code: Any, dictionary: dict[str, dict[str, str]] | None = None) -> dict[str, str]:
+    code_n = normalize_activity_code(code)
+    if dictionary and code_n in dictionary:
+        return dictionary[code_n].copy()
+    return infer_activity_fields(code_n)
+
 def find_promoters_header_row(raw: pd.DataFrame) -> int:
     for idx in range(min(15, len(raw))):
         joined = " | ".join(clean_text(x).lower() for x in raw.iloc[idx].tolist())
@@ -353,7 +541,11 @@ def find_promoters_header_row(raw: pd.DataFrame) -> int:
 def read_promoters_file(file: Any) -> tuple[pd.DataFrame, dict[str, Any], list[FileIssue]]:
     source = file_name(file)
     issues: list[FileIssue] = []
-    raw = read_raw_excel(file)
+    xls = pd.ExcelFile(file)
+    sheet_name = next((s for s in xls.sheet_names if norm_key(s) == "CONSOLIDADO"), xls.sheet_names[0])
+    raw = pd.read_excel(xls, sheet_name=sheet_name, header=None)
+    activity_dict, activity_dict_df, dict_issues = read_activity_dictionary(xls, source)
+    issues.extend(dict_issues)
     header_row = find_promoters_header_row(raw)
     header = raw.iloc[header_row].tolist()
     data = raw.iloc[header_row + 1 :].dropna(how="all").copy()
@@ -406,6 +598,7 @@ def read_promoters_file(file: Any) -> tuple[pd.DataFrame, dict[str, Any], list[F
             marker = clean_text(row.iloc[col]) if col < len(row) else ""
             if not marker:
                 continue
+            activity = activity_from_code(marker, activity_dict)
             records.append({
                 "fecha": dt,
                 "anio": int(dt.year),
@@ -423,8 +616,17 @@ def read_promoters_file(file: Any) -> tuple[pd.DataFrame, dict[str, Any], list[F
                 "marca_archivo": marca,
                 "detalle_archivo": detalle,
                 "horario_archivo": horario,
-                "activacion_codigo": marker.upper(),
-                "activacion_nombre": classify_activation(marker),
+                "activacion_codigo": activity.get("codigo", normalize_activity_code(marker)),
+                "activacion_nombre": activity.get("detalle", classify_activation(marker)),
+                "tipo_actividad": activity.get("tipo_actividad", "Sin clasificar"),
+                "estado_actividad": activity.get("estado_actividad", "Ejecutada"),
+                "ejecutor": activity.get("ejecutor", ""),
+                "horario": activity.get("horario", horario),
+                "jornada": activity.get("jornada", ""),
+                "cuenta_activacion": activity.get("cuenta_activacion", "No"),
+                "kpi_sebastian": activity.get("kpi_sebastian", "No"),
+                "kpi_agencia": activity.get("kpi_agencia", "No"),
+                "actividad_valida": activity.get("actividad_valida", "Sí"),
                 "archivo_origen": source,
             })
     activations = pd.DataFrame(records)
@@ -443,6 +645,7 @@ def read_promoters_file(file: Any) -> tuple[pd.DataFrame, dict[str, Any], list[F
         "fecha_min": activations["fecha"].min().strftime("%Y-%m-%d") if not activations.empty else "",
         "fecha_max": activations["fecha"].max().strftime("%Y-%m-%d") if not activations.empty else "",
         "tiendas": int(activations["tienda_codigo"].replace("", np.nan).nunique()) if not activations.empty else 0,
+        "diccionario_actividades": int(len(activity_dict_df)) if activity_dict_df is not None else 0,
     }
     return activations, report, issues
 
@@ -468,8 +671,16 @@ def enrich_sales_with_activations(sales: pd.DataFrame, activations: pd.DataFrame
     out = sales.copy()
     out["fecha"] = pd.to_datetime(out["fecha"]).dt.normalize()
     out["activacion"] = "No"
+    out["actividad_terreno"] = "No"
     out["activacion_codigo"] = ""
     out["activacion_nombre"] = ""
+    out["tipo_actividad"] = ""
+    out["estado_actividad"] = ""
+    out["ejecutor"] = ""
+    out["cuenta_activacion"] = "No"
+    out["kpi_sebastian"] = "No"
+    out["kpi_agencia"] = "No"
+    out["actividad_valida"] = "No"
     out["comuna"] = ""
     out["zona"] = ""
 
@@ -480,21 +691,35 @@ def enrich_sales_with_activations(sales: pd.DataFrame, activations: pd.DataFrame
     act["fecha"] = pd.to_datetime(act["fecha"]).dt.normalize()
 
     # Aggregate per store/date in case multiple activity types exist.
+    def join_unique(values):
+        return ", ".join(sorted(set(str(v) for v in values if clean_text(v))))
+
+    def any_yes(values):
+        return "Sí" if any(clean_text(v).lower() in {"sí", "si", "yes", "true", "1"} for v in values) else "No"
+
     agg = (
         act.groupby(["tienda_codigo", "fecha"], as_index=False)
         .agg(
-            activacion_codigo=("activacion_codigo", lambda x: ", ".join(sorted(set(filter(None, x))))),
-            activacion_nombre=("activacion_nombre", lambda x: ", ".join(sorted(set(filter(None, x))))),
+            activacion_codigo=("activacion_codigo", join_unique),
+            activacion_nombre=("activacion_nombre", join_unique),
+            tipo_actividad=("tipo_actividad", join_unique),
+            estado_actividad=("estado_actividad", join_unique),
+            ejecutor=("ejecutor", join_unique),
+            cuenta_activacion=("cuenta_activacion", any_yes),
+            kpi_sebastian=("kpi_sebastian", any_yes),
+            kpi_agencia=("kpi_agencia", any_yes),
+            actividad_valida=("actividad_valida", any_yes),
             comuna=("comuna", "first"),
             zona=("zona", "first"),
         )
     )
     out = out.merge(agg, on=["tienda_codigo", "fecha"], how="left", suffixes=("", "_act"))
-    out["activacion_codigo"] = out["activacion_codigo_act"].fillna("")
-    out["activacion_nombre"] = out["activacion_nombre_act"].fillna("")
-    out["comuna"] = out["comuna_act"].fillna("")
-    out["zona"] = out["zona_act"].fillna("")
-    out["activacion"] = np.where(out["activacion_codigo"].ne(""), "Sí", "No")
+    for col in ["activacion_codigo", "activacion_nombre", "tipo_actividad", "estado_actividad", "ejecutor", "cuenta_activacion", "kpi_sebastian", "kpi_agencia", "actividad_valida", "comuna", "zona"]:
+        act_col = f"{col}_act"
+        if act_col in out.columns:
+            out[col] = out[act_col].fillna(out[col] if col in out.columns else "")
+    out["activacion"] = np.where(out["cuenta_activacion"].eq("Sí"), "Sí", "No")
+    out["actividad_terreno"] = np.where(out["actividad_valida"].eq("Sí"), "Sí", "No")
     out = out.drop(columns=[c for c in out.columns if c.endswith("_act")])
     return out
 
