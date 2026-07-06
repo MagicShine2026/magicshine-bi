@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv
+venv/
+.DS_Store
+*.xlsx
+*.xls
+*.xlsm
+!data/.gitkeep
+.streamlit/secrets.toml
