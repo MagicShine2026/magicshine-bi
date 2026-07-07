@@ -20,3 +20,8 @@ Versión enfocada en evaluar a Sebastián según las 3 familias KPI del cargo:
 ## Archivos confidenciales
 
 No subir Excel reales al repositorio. El dashboard los recibe desde la interfaz de Streamlit y los procesa en memoria.
+
+
+## v0.5.1
+
+- Renombra el grupo “Tiendas sin activación/visita” a “Tiendas sin acciones” para mejorar la lectura comercial del análisis comparativo.

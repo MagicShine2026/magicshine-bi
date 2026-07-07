@@ -199,7 +199,7 @@ def activation_impact_monthly(df: pd.DataFrame, activations: pd.DataFrame) -> pd
     act_valid = valid_activities(activations)
     active_stores = set(act_valid[act_valid["mes"].eq(curr_month)]["tienda_codigo"].dropna().unique())
     base = df[df["mes"].isin(months)].copy()
-    base["grupo"] = np.where(base["tienda_codigo"].isin(active_stores), "Tiendas con activación/visita", "Tiendas sin activación/visita")
+    base["grupo"] = np.where(base["tienda_codigo"].isin(active_stores), "Tiendas con activación/visita", "Tiendas sin acciones")
     out = (
         base.groupby(["grupo", "mes"], as_index=False)
         .agg(venta=("venta", "sum"), unidades=("unidades", "sum"), tiendas=("tienda_codigo", "nunique"))
