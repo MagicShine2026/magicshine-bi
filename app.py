@@ -6,29 +6,39 @@ import streamlit as st
 
 from config import APP_NAME, MODULE_NAME, VERSION, BRAND_COLOR, DARK_COLOR, ACCENT_COLOR
 from utils.data_engine import build_master_dataset
-from utils.analytics import (
-    WEEKDAY_ORDER,
-    activation_impact_monthly,
-    activation_summary,
-    basic_diagnosis,
-    category_summary,
-    daily_sales,
-    field_visit_kpis,
-    store_activation_effect,
-    activation_calendar_matrix,
-    sebastian_scorecard,
-    executive_action_plan,
-    growth_by_store,
-    integer,
-    kpi_summary,
-    latest_month_comparison,
-    money,
-    monthly_summary,
-    pct,
-    product_ranking,
-    store_ranking,
-    weekday_ranking,
-)
+from utils import analytics as an
+
+# Import defensivo: evita que una diferencia entre app.py y utils/analytics.py deje la app caída.
+def _empty_df(*args, **kwargs):
+    return pd.DataFrame()
+
+def _empty_list(*args, **kwargs):
+    return []
+
+def _empty_scorecard(*args, **kwargs):
+    return {"summary": {}, "weekly": pd.DataFrame(), "by_store": pd.DataFrame(), "detail": pd.DataFrame()}
+
+WEEKDAY_ORDER = getattr(an, "WEEKDAY_ORDER", ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"])
+activation_impact_monthly = getattr(an, "activation_impact_monthly", _empty_df)
+activation_summary = getattr(an, "activation_summary", _empty_df)
+basic_diagnosis = getattr(an, "basic_diagnosis", _empty_list)
+category_summary = getattr(an, "category_summary", _empty_df)
+daily_sales = getattr(an, "daily_sales", _empty_df)
+field_visit_kpis = getattr(an, "field_visit_kpis", _empty_scorecard)
+store_activation_effect = getattr(an, "store_activation_effect", _empty_df)
+activation_calendar_matrix = getattr(an, "activation_calendar_matrix", _empty_df)
+sebastian_scorecard = getattr(an, "sebastian_scorecard", _empty_scorecard)
+executive_action_plan = getattr(an, "executive_action_plan", _empty_list)
+growth_by_store = getattr(an, "growth_by_store", _empty_df)
+integer = getattr(an, "integer", lambda value: str(value))
+kpi_summary = getattr(an, "kpi_summary", lambda df: {})
+latest_month_comparison = getattr(an, "latest_month_comparison", lambda df: {})
+money = getattr(an, "money", lambda value: str(value))
+monthly_summary = getattr(an, "monthly_summary", _empty_df)
+pct = getattr(an, "pct", lambda value: str(value))
+product_ranking = getattr(an, "product_ranking", _empty_df)
+store_ranking = getattr(an, "store_ranking", _empty_df)
+weekday_ranking = getattr(an, "weekday_ranking", _empty_df)
 
 st.set_page_config(page_title=f"{APP_NAME} | {MODULE_NAME}", page_icon="📊", layout="wide")
 
