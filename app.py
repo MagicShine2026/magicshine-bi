@@ -102,7 +102,7 @@ def load_data_cached(sellout_files, promoter_file):
 
 
 st.title(APP_NAME)
-st.caption(f"{MODULE_NAME} · v0.3.1 Diccionario de actividades y KPIs terreno")
+st.caption(f"{MODULE_NAME} · {VERSION}")
 
 with st.sidebar:
     st.header("📂 Carga de datos")
@@ -397,63 +397,98 @@ with tab_activation:
         show = [c for c in show if c in activations.columns]
         st.dataframe(fmt_table(activations[show].sort_values(["fecha", "tienda_codigo"])), use_container_width=True, hide_index=True)
 
+
 with tab_sebastian:
     st.subheader("KPIs Sebastián / trabajo en terreno")
     st.markdown(
-        "<div class='section-note'><b>Lectura:</b> esta versión usa la hoja <b>Diccionario</b> del archivo de promotores para distinguir Agencia, Sebastián, visitas, activaciones, cancelaciones e incentivos. Ya no depende del color de las celdas.</div>",
+        "<div class='section-note'><b>Lectura:</b> esta versión separa cumplimiento semanal, cumplimiento por volumen, visitas, activaciones de Sebastián y activaciones de Agencia. La meta de Sebastián se mide solo con activaciones ejecutadas de lunes a viernes; los sábados se reportan aparte.</div>",
         unsafe_allow_html=True,
     )
     score = sebastian_scorecard(activations, filtered)
     fs = score["summary"]
-    status_color = {"Verde": "#0F766E", "Amarillo": "#B45309", "Rojo": "#B91C1C"}.get(fs.get("estado", ""), DARK_COLOR)
 
     c1, c2, c3, c4, c5, c6 = st.columns(6)
     with c1:
-        kpi_card("Estado terreno", str(fs["estado"]), "Cumplimiento semanal", None, None)
+        kpi_card("Estado terreno", str(fs.get("estado", "Sin datos")), "Semanas + volumen")
     with c2:
-        kpi_card("Cumplimiento", pct(fs["cumplimiento_pct"]), "Meta: 4 activaciones/semana")
+        kpi_card("Cumplimiento semanas", pct(fs.get("cumplimiento_semanas_pct", 0)), f"{integer(fs.get('semanas_ok', 0))}/{integer(fs.get('semanas_total', 0))} semanas OK")
     with c3:
-        kpi_card("Visitas", integer(fs["visitas"]), "KPI Sebastián")
+        kpi_card("Cumplimiento volumen", pct(fs.get("cumplimiento_volumen_pct", 0)), f"{integer(fs.get('activaciones_semana', 0))}/{integer(fs.get('objetivo_activaciones_semana', 0))} activaciones")
     with c4:
-        kpi_card("Activaciones semana", integer(fs["activaciones_semana"]), "Sebastián, no incluye sábado")
+        kpi_card("Brecha", integer(fs.get("brecha_activaciones_semana", 0)), "Activaciones L-V faltantes")
     with c5:
-        kpi_card("Activaciones sábado", integer(fs["activaciones_sabado"]), "Agencia/Sebastián según diccionario")
+        kpi_card("Visitas", integer(fs.get("visitas", 0)), f"Incluye {integer(fs.get('visitas_con_incentivo', 0))} con incentivo")
     with c6:
-        kpi_card("Tiendas trabajadas", integer(fs["tiendas"]), "Locales únicos")
+        kpi_card("Tiendas trabajadas", integer(fs.get("tiendas", 0)), "Locales únicos Sebastián")
 
-    if fs["brecha_activaciones_semana"] > 0:
+    c7, c8, c9, c10 = st.columns(4)
+    with c7:
+        kpi_card("Activ. Sebastián L-V", integer(fs.get("activaciones_semana", 0)), "Cuenta para meta semanal")
+    with c8:
+        kpi_card("Sábado Agencia", integer(fs.get("activaciones_sabado_agencia", 0)), "Separado del KPI Sebastián")
+    with c9:
+        kpi_card("Sábado Sebastián", integer(fs.get("activaciones_sabado_sebastian", 0)), "No suma a meta L-V")
+    with c10:
+        kpi_card("Activ. Agencia total", integer(fs.get("activaciones_agencia_total", 0)), "Control agencia")
+
+    if fs.get("brecha_activaciones_semana", 0) > 0:
         st.markdown(
-            f"<div class='risk-note'><b>Brecha operativa:</b> faltan {integer(fs['brecha_activaciones_semana'])} activaciones de lunes a viernes para cumplir 4 por semana en todas las semanas del período cargado.</div>",
+            f"<div class='risk-note'><b>Brecha operativa:</b> faltan {integer(fs.get('brecha_activaciones_semana', 0))} activaciones de Sebastián de lunes a viernes para cumplir la meta del período cargado. No se consideran sábados ni activaciones de Agencia.</div>",
             unsafe_allow_html=True,
         )
     else:
-        st.success("Cumplimiento semanal de activaciones de lunes a viernes dentro del estándar definido.")
+        st.success("Cumplimiento de activaciones Sebastián lunes-viernes dentro del estándar definido.")
 
-    c7, c8 = st.columns([0.95, 1.05])
-    with c7:
-        st.markdown("#### Cumplimiento semanal")
+    c11, c12 = st.columns([1.05, 0.95])
+    with c11:
+        st.markdown("#### Cumplimiento semanal Sebastián")
         weekly = score["weekly"]
         if weekly.empty:
             st.info("No hay actividades para medir.")
         else:
-            st.dataframe(fmt_table(weekly, int_cols=["visitas", "activaciones_semana", "activaciones_sabado", "tiendas", "actividades"]), use_container_width=True, hide_index=True)
-            fig = px.bar(weekly, x="semana", y=["visitas", "activaciones_semana", "activaciones_sabado"], barmode="group", title="Actividades por semana")
+            cols = [
+                "semana", "estado", "cumple_semana", "activaciones_sebastian_lun_vie",
+                "objetivo_activaciones_semana", "brecha_activaciones", "cumplimiento_volumen_pct",
+                "visitas", "visitas_con_incentivo", "activaciones_sabado_agencia",
+                "activaciones_sabado_sebastian", "tiendas_trabajadas",
+            ]
+            cols = [c for c in cols if c in weekly.columns]
+            st.dataframe(
+                fmt_table(weekly[cols], int_cols=["activaciones_sebastian_lun_vie", "objetivo_activaciones_semana", "brecha_activaciones", "visitas", "visitas_con_incentivo", "activaciones_sabado_agencia", "activaciones_sabado_sebastian", "tiendas_trabajadas"], pct_cols=["cumplimiento_volumen_pct"]),
+                use_container_width=True,
+                hide_index=True,
+            )
+            fig = px.bar(
+                weekly,
+                x="semana",
+                y=["activaciones_sebastian_lun_vie", "visitas", "activaciones_sabado_agencia"],
+                barmode="group",
+                title="Actividades por semana: Sebastián vs Agencia",
+            )
             fig.update_layout(height=390, margin=dict(l=10, r=10, t=60, b=10))
             st.plotly_chart(fig, use_container_width=True)
-    with c8:
+    with c12:
         st.markdown("#### Tiendas trabajadas y venta asociada")
         by_store = score["by_store"]
         if not by_store.empty:
-            cols = [c for c in ["tienda_codigo", "tienda_promotores", "comuna", "zona", "visitas", "activaciones_semana", "activaciones_sabado", "actividades", "venta", "unidades", "primera_fecha", "ultima_fecha"] if c in by_store.columns]
-            st.dataframe(fmt_table(by_store[cols], money_cols=["venta"], int_cols=["visitas", "activaciones_semana", "activaciones_sabado", "actividades", "unidades"]), use_container_width=True, hide_index=True)
-            top_visit = by_store.sort_values("actividades", ascending=False).head(15).sort_values("actividades")
-            fig = px.bar(top_visit, y="tienda_promotores", x="actividades", orientation="h", title="Top tiendas por cantidad de actividades")
+            cols = [c for c in [
+                "tienda_codigo", "tienda_promotores", "comuna", "zona", "visitas", "visitas_con_incentivo",
+                "activaciones_sebastian_lun_vie", "activaciones_sabado_agencia", "activaciones_sabado_sebastian",
+                "actividades_sebastian_total", "venta", "unidades", "primera_fecha", "ultima_fecha"
+            ] if c in by_store.columns]
+            st.dataframe(
+                fmt_table(by_store[cols], money_cols=["venta"], int_cols=["visitas", "visitas_con_incentivo", "activaciones_sebastian_lun_vie", "activaciones_sabado_agencia", "activaciones_sabado_sebastian", "actividades_sebastian_total", "unidades"]),
+                use_container_width=True,
+                hide_index=True,
+            )
+            top_visit = by_store.sort_values("actividades_sebastian_total", ascending=False).head(15).sort_values("actividades_sebastian_total")
+            fig = px.bar(top_visit, y="tienda_promotores", x="actividades_sebastian_total", orientation="h", title="Top tiendas por actividad Sebastián")
             fig.update_traces(marker_color=BRAND_COLOR)
             fig.update_layout(height=430, margin=dict(l=10, r=10, t=60, b=10))
             st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("#### Lectura comercial")
-    st.write("El cargo exige visitas permanentes, activaciones en punto de venta, supervisión comercial y al menos 4 activaciones semanales sin contar sábados. Esta pestaña transforma ese estándar operativo en métricas de control semanal.")
+    st.markdown("#### Criterio de medición")
+    st.write("El KPI operativo principal es cumplir al menos 4 activaciones semanales de lunes a viernes. Las visitas comerciales y las activaciones de sábado se reportan como gestión de terreno, pero no sustituyen la meta semanal de activaciones de Sebastián.")
 
 with tab_plan:
     st.subheader("Plan comercial sugerido")

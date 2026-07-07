@@ -1,12 +1,14 @@
-# Magic Shine BI — v0.3.2 Hotfix Import
+# Magic Shine BI — v0.3.3 KPIs Sebastián
 
-Corrige error de importación entre `app.py` y `utils/analytics.py`.
+Corrige y separa la medición operativa de Sebastián.
 
-## Qué corrige
+## Cambios
 
-- Import defensivo de funciones analíticas.
-- Mantiene lectura del diccionario de actividades.
-- Mantiene v0.3.1 completa.
+- Separa **cumplimiento de semanas** y **cumplimiento de volumen**.
+- Calcula la brecha real de activaciones lunes-viernes.
+- Separa activaciones de Sebastián, Agencia y sábados.
+- Agrega tabla semanal con estado Verde / Amarillo / Rojo.
+- Mantiene la lectura del `Diccionario` del archivo de promotores.
 
 ## Subida
 

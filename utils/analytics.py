@@ -273,67 +273,153 @@ def valid_activities(activations: pd.DataFrame) -> pd.DataFrame:
     return act
 
 
+
+def _yes_series(series: pd.Series) -> pd.Series:
+    return series.astype(str).str.lower().isin(["sí", "si", "yes", "true", "1", "x"])
+
+
 def field_visit_kpis(activations: pd.DataFrame, sales: pd.DataFrame | None = None) -> dict[str, pd.DataFrame | dict]:
+    """KPIs operativos de terreno, separados por responsable y tipo de actividad.
+
+    Regla de negocio:
+    - Sebastián: cuenta KPI cuando el diccionario indique KPI Sebastián = Sí, o el ejecutor sea Sebastián.
+    - Activaciones de cumplimiento semanal: solo activaciones ejecutadas de Sebastián de lunes a viernes.
+    - Sábado se informa aparte, porque no cuenta para la meta mínima semanal definida para el cargo.
+    - Agencia se informa aparte para no contaminar el desempeño individual de Sebastián.
+    """
+    empty_summary = {
+        "visitas": 0,
+        "visitas_con_incentivo": 0,
+        "activaciones_semana": 0,
+        "activaciones_sabado_agencia": 0,
+        "activaciones_sabado_sebastian": 0,
+        "activaciones_sabado": 0,
+        "activaciones_agencia_total": 0,
+        "actividades_sebastian_total": 0,
+        "actividades_total": 0,
+        "tiendas": 0,
+        "semanas_ok": 0,
+        "semanas_total": 0,
+        "objetivo_activaciones_semana": 0,
+        "brecha_activaciones_semana": 0,
+        "cumplimiento_semanas_pct": 0,
+        "cumplimiento_volumen_pct": 0,
+        "estado": "Sin datos",
+    }
     if activations is None or activations.empty:
-        return {
-            "summary": {"visitas": 0, "activaciones_semana": 0, "activaciones_sabado": 0, "tiendas": 0, "semanas_ok": 0, "semanas_total": 0},
-            "weekly": pd.DataFrame(),
-            "by_store": pd.DataFrame(),
-            "detail": pd.DataFrame(),
-        }
+        return {"summary": empty_summary, "weekly": pd.DataFrame(), "by_store": pd.DataFrame(), "detail": pd.DataFrame()}
+
     act = valid_activities(activations).copy()
     if act.empty:
-        return {"summary": {"visitas": 0, "activaciones_semana": 0, "activaciones_sabado": 0, "tiendas": 0, "semanas_ok": 0, "semanas_total": 0}, "weekly": pd.DataFrame(), "by_store": pd.DataFrame(), "detail": pd.DataFrame()}
+        return {"summary": empty_summary, "weekly": pd.DataFrame(), "by_store": pd.DataFrame(), "detail": pd.DataFrame()}
+
     act["fecha"] = pd.to_datetime(act["fecha"]).dt.normalize()
     act["actividad_terreno"] = act.apply(classify_activity_row, axis=1)
-    act["semana"] = act["fecha"].dt.to_period("W-MON").astype(str)
-    act["es_visita"] = act["actividad_terreno"].str.contains("Visita", na=False) & act.get("kpi_sebastian", "No").astype(str).str.lower().isin(["sí", "si"])
-    act["es_activacion_semana"] = act["actividad_terreno"].eq("Activación Sebastián semana")
-    act["es_activacion_sabado"] = act["actividad_terreno"].str.contains("Activación", na=False) & act["dia_semana"].eq("Sábado")
-    act["es_agencia"] = act.get("ejecutor", "").astype(str).str.lower().str.contains("agencia", na=False)
+    act["semana"] = act["fecha"].dt.to_period("W-SUN").astype(str)
+    act["semana_inicio"] = act["fecha"].dt.to_period("W-SUN").apply(lambda p: p.start_time).dt.normalize()
+    act["semana_fin"] = act["fecha"].dt.to_period("W-SUN").apply(lambda p: p.end_time).dt.normalize()
+
+    ejecutor = act.get("ejecutor", pd.Series("", index=act.index)).astype(str).str.lower()
+    tipo = act.get("tipo_actividad", pd.Series("", index=act.index)).astype(str).str.lower()
+    cuenta_activacion = _yes_series(act.get("cuenta_activacion", pd.Series("No", index=act.index)))
+    kpi_sebastian = _yes_series(act.get("kpi_sebastian", pd.Series("No", index=act.index)))
+    kpi_agencia = _yes_series(act.get("kpi_agencia", pd.Series("No", index=act.index)))
+
+    act["es_sebastian"] = kpi_sebastian | ejecutor.str.contains("sebasti", na=False)
+    act["es_agencia"] = kpi_agencia | ejecutor.str.contains("agencia", na=False)
+    act["es_visita"] = tipo.str.contains("visita", na=False) & act["es_sebastian"]
+    act["es_visita_incentivo"] = tipo.str.contains("incentivo|galleta", regex=True, na=False) & act["es_visita"]
+    act["es_activacion"] = cuenta_activacion | tipo.str.contains("activaci", na=False)
+    act["es_lun_vie"] = ~act["dia_semana"].isin(["Sábado", "Domingo"])
+    act["es_sabado"] = act["dia_semana"].eq("Sábado")
+    act["es_activacion_sebastian_lun_vie"] = act["es_activacion"] & act["es_sebastian"] & act["es_lun_vie"]
+    act["es_activacion_sabado_agencia"] = act["es_activacion"] & act["es_agencia"] & act["es_sabado"]
+    act["es_activacion_sabado_sebastian"] = act["es_activacion"] & act["es_sebastian"] & act["es_sabado"]
+    act["es_activacion_agencia"] = act["es_activacion"] & act["es_agencia"]
+    act["es_actividad_sebastian"] = act["es_sebastian"] & (act["es_visita"] | act["es_activacion"])
 
     weekly = (
-        act.groupby("semana", as_index=False)
+        act.groupby(["semana", "semana_inicio", "semana_fin"], as_index=False)
         .agg(
             visitas=("es_visita", "sum"),
-            activaciones_semana=("es_activacion_semana", "sum"),
-            activaciones_sabado=("es_activacion_sabado", "sum"),
-            tiendas=("tienda_codigo", "nunique"),
-            actividades=("tienda_codigo", "count"),
+            visitas_con_incentivo=("es_visita_incentivo", "sum"),
+            activaciones_sebastian_lun_vie=("es_activacion_sebastian_lun_vie", "sum"),
+            activaciones_sabado_agencia=("es_activacion_sabado_agencia", "sum"),
+            activaciones_sabado_sebastian=("es_activacion_sabado_sebastian", "sum"),
+            activaciones_agencia_total=("es_activacion_agencia", "sum"),
+            actividades_sebastian_total=("es_actividad_sebastian", "sum"),
+            tiendas_trabajadas=("tienda_codigo", "nunique"),
+            actividades_total=("tienda_codigo", "count"),
         )
-        .sort_values("semana")
+        .sort_values("semana_inicio")
     )
-    weekly["cumple_min_4_activaciones_semana"] = np.where(weekly["activaciones_semana"] >= 4, "Sí", "No")
+    weekly["objetivo_activaciones_semana"] = 4
+    weekly["brecha_activaciones"] = (weekly["objetivo_activaciones_semana"] - weekly["activaciones_sebastian_lun_vie"]).clip(lower=0)
+    weekly["cumplimiento_volumen_pct"] = np.minimum(weekly["activaciones_sebastian_lun_vie"] / 4 * 100, 100)
+    weekly["cumple_semana"] = np.where(weekly["activaciones_sebastian_lun_vie"] >= 4, "Sí", "No")
+    weekly["estado"] = np.select(
+        [weekly["activaciones_sebastian_lun_vie"] >= 4, weekly["activaciones_sebastian_lun_vie"].between(2, 3)],
+        ["Verde", "Amarillo"],
+        default="Rojo",
+    )
 
     by_store = (
         act.groupby(["tienda_codigo", "tienda_promotores", "comuna", "zona"], as_index=False)
         .agg(
             visitas=("es_visita", "sum"),
-            activaciones_semana=("es_activacion_semana", "sum"),
-            activaciones_sabado=("es_activacion_sabado", "sum"),
-            actividades=("tienda_codigo", "count"),
+            visitas_con_incentivo=("es_visita_incentivo", "sum"),
+            activaciones_sebastian_lun_vie=("es_activacion_sebastian_lun_vie", "sum"),
+            activaciones_sabado_agencia=("es_activacion_sabado_agencia", "sum"),
+            activaciones_sabado_sebastian=("es_activacion_sabado_sebastian", "sum"),
+            activaciones_agencia_total=("es_activacion_agencia", "sum"),
+            actividades_sebastian_total=("es_actividad_sebastian", "sum"),
+            actividades_total=("tienda_codigo", "count"),
             primera_fecha=("fecha", "min"),
             ultima_fecha=("fecha", "max"),
         )
-        .sort_values("actividades", ascending=False)
+        .sort_values("actividades_total", ascending=False)
     )
 
     if sales is not None and not sales.empty:
         sales_by_store = sales.groupby("tienda_codigo", as_index=False).agg(venta=("venta", "sum"), unidades=("unidades", "sum"))
         by_store = by_store.merge(sales_by_store, on="tienda_codigo", how="left").fillna({"venta": 0, "unidades": 0})
 
+    weeks_total = int(len(weekly))
+    weeks_ok = int((weekly["cumple_semana"] == "Sí").sum()) if weeks_total else 0
+    target_total = weeks_total * 4
+    activations_weekday = int(act["es_activacion_sebastian_lun_vie"].sum())
+    gap = int(max(target_total - activations_weekday, 0))
+    compliance_weeks = safe_div(weeks_ok, weeks_total) * 100 if weeks_total else 0
+    compliance_volume = min(safe_div(activations_weekday, target_total) * 100, 100) if target_total else 0
+
+    if compliance_weeks >= 80 and gap == 0:
+        status = "Verde"
+    elif compliance_weeks >= 50 or compliance_volume >= 70:
+        status = "Amarillo"
+    else:
+        status = "Rojo"
+
     summary = {
         "visitas": int(act["es_visita"].sum()),
-        "activaciones_semana": int(act["es_activacion_semana"].sum()),
-        "activaciones_sabado": int(act["es_activacion_sabado"].sum()),
-        "tiendas": int(act["tienda_codigo"].nunique()),
-        "semanas_ok": int((weekly["cumple_min_4_activaciones_semana"] == "Sí").sum()) if not weekly.empty else 0,
-        "semanas_total": int(len(weekly)),
+        "visitas_con_incentivo": int(act["es_visita_incentivo"].sum()),
+        "activaciones_semana": activations_weekday,
+        "activaciones_sabado_agencia": int(act["es_activacion_sabado_agencia"].sum()),
+        "activaciones_sabado_sebastian": int(act["es_activacion_sabado_sebastian"].sum()),
+        "activaciones_sabado": int((act["es_activacion_sabado_agencia"] | act["es_activacion_sabado_sebastian"]).sum()),
+        "activaciones_agencia_total": int(act["es_activacion_agencia"].sum()),
+        "actividades_sebastian_total": int(act["es_actividad_sebastian"].sum()),
         "actividades_total": int(len(act)),
+        "tiendas": int(act.loc[act["es_actividad_sebastian"], "tienda_codigo"].nunique()),
+        "semanas_ok": weeks_ok,
+        "semanas_total": weeks_total,
+        "objetivo_activaciones_semana": target_total,
+        "brecha_activaciones_semana": gap,
+        "cumplimiento_semanas_pct": compliance_weeks,
+        "cumplimiento_volumen_pct": compliance_volume,
+        "estado": status,
     }
 
     return {"summary": summary, "weekly": weekly, "by_store": by_store, "detail": act}
-
 
 def basic_diagnosis(df: pd.DataFrame, activations: pd.DataFrame) -> list[str]:
     notes: list[str] = []
@@ -462,24 +548,10 @@ def activation_calendar_matrix(activations: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+
 def sebastian_scorecard(activations: pd.DataFrame, sales: pd.DataFrame | None = None) -> dict:
     field = field_visit_kpis(activations, sales)
     fs = field["summary"]
-    weekly = field["weekly"]
-    weeks_total = max(int(fs.get("semanas_total", 0)), 1)
-    compliance_rate = int(fs.get("semanas_ok", 0)) / weeks_total * 100 if weeks_total else 0
-    if weekly is not None and not weekly.empty and "activaciones_semana" in weekly.columns:
-        weekly_target_gap = int((4 - weekly["activaciones_semana"].clip(upper=4)).clip(lower=0).sum())
-    else:
-        weekly_target_gap = 0
-
-    if compliance_rate >= 80:
-        status = "Verde"
-    elif compliance_rate >= 50:
-        status = "Amarillo"
-    else:
-        status = "Rojo"
-
     by_store = field["by_store"]
     top_store = ""
     top_sales = 0
@@ -490,14 +562,11 @@ def sebastian_scorecard(activations: pd.DataFrame, sales: pd.DataFrame | None = 
 
     summary = {
         **fs,
-        "cumplimiento_pct": compliance_rate,
-        "brecha_activaciones_semana": weekly_target_gap,
-        "estado": status,
+        "cumplimiento_pct": fs.get("cumplimiento_semanas_pct", 0),  # compatibilidad con versiones previas
         "tienda_top_venta_trabajada": top_store,
         "venta_top_tienda_trabajada": top_sales,
     }
-    return {"summary": summary, "weekly": weekly, "by_store": by_store, "detail": field["detail"]}
-
+    return {"summary": summary, "weekly": field["weekly"], "by_store": by_store, "detail": field["detail"]}
 
 def executive_action_plan(df: pd.DataFrame, activations: pd.DataFrame) -> list[dict[str, str]]:
     actions: list[dict[str, str]] = []

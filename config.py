@@ -1,6 +1,6 @@
 APP_NAME = "Magic Shine BI"
 MODULE_NAME = "Retail Intelligence · Autoplanet"
-VERSION = "v0.3.1 Diccionario de actividades"
+VERSION = "v0.3.3 KPIs Sebastián"
 BRAND_COLOR = "#00877A"
 DARK_COLOR = "#0F2A3A"
 ACCENT_COLOR = "#FFB000"
