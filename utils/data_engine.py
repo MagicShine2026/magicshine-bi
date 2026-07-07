@@ -34,6 +34,14 @@ WEEKDAY_ES = {
     6: "Domingo",
 }
 
+# Control de calidad solicitado por Magic Shine.
+# Solo deben entrar filas de tiendas Autoplanet cuyo campo "Nombre 1" comienza con AP.
+# Los totales se recalculan desde las filas filtradas, nunca desde la fila "Total general".
+SELL_OUT_CONTROL_TOTALS = {
+    "2026-05": {"unidades_total": 4780.0, "venta_total": 10576950.0},
+    "2026-06": {"unidades_total": 4715.0, "venta_total": 10604240.0},
+}
+
 
 @dataclass
 class FileIssue:
@@ -245,7 +253,24 @@ def read_sellout_file(file: Any) -> tuple[pd.DataFrame, dict[str, Any], list[Fil
     if not sales_cols:
         issues.append(FileIssue(source, "Sell Out", "Advertencia", "No se detectaron columnas diarias de venta $, se dejarán ventas en cero."))
 
-    data = raw.iloc[header_row + 1 :].dropna(how="all").copy()
+    data_all = raw.iloc[header_row + 1 :].dropna(how="all").copy()
+
+    # Filtro crítico: conservar únicamente tiendas reales Autoplanet.
+    # Campo fuente: Nombre 1. Debe comenzar con AP (ej.: AP0001-La Florida).
+    # Excluye canales logísticos, externos y subtotales como Total general.
+    store_series_all = data_all.iloc[:, store_col].apply(clean_text) if store_col is not None else pd.Series([], dtype="object")
+    ap_mask = store_series_all.astype(str).str.strip().str.upper().str.startswith("AP")
+    excluded_rows_df = data_all.loc[~ap_mask].copy()
+    excluded_store_values = (
+        store_series_all.loc[~ap_mask]
+        .replace("", np.nan)
+        .dropna()
+        .drop_duplicates()
+        .astype(str)
+        .tolist()
+    )
+    data = data_all.loc[ap_mask].copy()
+
     records: list[dict[str, Any]] = []
     skipped_rows = 0
 
@@ -306,21 +331,46 @@ def read_sellout_file(file: Any) -> tuple[pd.DataFrame, dict[str, Any], list[Fil
     ]
     df = df[ordered]
 
+    period = f"{year}-{month:02d}"
+    venta_total = float(df["venta"].sum())
+    unidades_total = float(df["unidades"].sum())
+    control = SELL_OUT_CONTROL_TOTALS.get(period, {})
+    control_unidades = control.get("unidades_total")
+    control_venta = control.get("venta_total")
+    control_ok = "No aplica"
+    if control:
+        unidades_ok = abs(unidades_total - float(control_unidades)) < 0.01
+        venta_ok = abs(venta_total - float(control_venta)) < 0.01
+        control_ok = "OK" if unidades_ok and venta_ok else "Revisar"
+        if control_ok != "OK":
+            issues.append(FileIssue(
+                source,
+                "Sell Out",
+                "Advertencia",
+                f"Control {period} no calza tras filtro AP: unidades {unidades_total:,.0f} vs {float(control_unidades):,.0f}; venta ${venta_total:,.0f} vs ${float(control_venta):,.0f}.",
+            ))
+
     report = {
         "archivo": source,
         "tipo": "Sell Out",
         "estado": "OK",
-        "filas_excel": int(len(data)),
+        "filas_excel": int(len(data_all)),
+        "filas_tienda_ap": int(len(data)),
+        "filas_excluidas_no_ap": int(len(excluded_rows_df)),
         "registros_generados": int(len(df)),
-        "mes": f"{year}-{month:02d}",
+        "mes": period,
         "header_row_excel": int(header_row + 1),
         "dias_unidades": sorted(set(unit_cols.values())),
         "dias_venta": sorted(set(sales_cols.values())),
         "tiendas": int(df["tienda_codigo"].replace("", np.nan).nunique()),
         "skus": int(df["sku"].replace("", np.nan).nunique()),
-        "venta_total": float(df["venta"].sum()),
-        "unidades_total": float(df["unidades"].sum()),
+        "venta_total": venta_total,
+        "unidades_total": unidades_total,
+        "control_unidades": control_unidades if control_unidades is not None else "",
+        "control_venta": control_venta if control_venta is not None else "",
+        "control_calidad": control_ok,
         "filas_omitidas": int(skipped_rows),
+        "valores_excluidos_nombre_1": ", ".join(excluded_store_values[:25]) + (" …" if len(excluded_store_values) > 25 else ""),
     }
     return df, report, issues
 

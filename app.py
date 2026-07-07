@@ -742,7 +742,7 @@ with tab_quality:
     st.subheader("Calidad de datos")
     if not quality.empty:
         display_quality = quality.copy()
-        st.dataframe(fmt_table(display_quality, money_cols=["venta_total"], int_cols=["unidades_total", "filas_excel", "registros_generados", "tiendas", "skus", "filas_omitidas"]), use_container_width=True, hide_index=True)
+        st.dataframe(fmt_table(display_quality, money_cols=["venta_total", "control_venta"], int_cols=["unidades_total", "control_unidades", "filas_excel", "filas_tienda_ap", "filas_excluidas_no_ap", "registros_generados", "tiendas", "skus", "filas_omitidas"]), use_container_width=True, hide_index=True)
     else:
         st.warning("No hay reporte de calidad disponible.")
 

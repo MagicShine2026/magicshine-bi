@@ -1,27 +1,34 @@
-# Magic Shine BI — v0.5 Impacto Sebastián
+# Magic Shine BI — v0.5.2 Filtro tiendas AP
 
-Versión enfocada en evaluar a Sebastián según las 3 familias KPI del cargo:
+## Cambio principal
 
-1. **Sell Out tiendas asignadas (40%)**
-   - Activación PM / lunes-viernes Sebastián vs venta del mismo día.
-   - Visita comercial Sebastián vs venta del mismo día.
-   - Activación sábado Agencia como benchmark separado.
-   - Comparación contra promedio de la misma tienda en días sin actividad.
+Se aplica el filtro solicitado sobre los archivos de Sell Out antes de cualquier KPI, ranking o comparación:
 
-2. **Creación de contenido (30%)**
-   - Módulo preparado para cargar una planilla simple: `Fecha`, `Tienda`, `Tipo contenido`, `Link`, `Estado`, `Aprobado`.
-   - También puede venir como hoja `Contenido` dentro de la plantilla de visitas.
-   - Los archivos se procesan en memoria y no se guardan en GitHub ni en Streamlit.
+- Campo base: `Nombre 1`.
+- Se conservan solo filas cuyo valor comienza con `AP`.
+- Se excluyen canales/logística/subtotales como `Ega-Kat`, `GPlanet Externos`, `Lo Boza`, `Logístico`, `Megalogistica` y `Total general`.
+- La fila `Total general` no se usa para validar; los totales se recalculan sumando filas AP filtradas.
 
-3. **Métricas e información comercial (30%)**
-   - Lectura de la plantilla de visitas de Sebastián.
-   - KPIs de fichas completas, tiendas visitadas, quiebres, riesgos, sobrestock, pendientes, fotos, vendedor clave y conocimiento Magic Shine.
+## Control de calidad agregado
 
-## Archivos confidenciales
+En la pestaña **Calidad de datos** se agregan:
 
-No subir Excel reales al repositorio. El dashboard los recibe desde la interfaz de Streamlit y los procesa en memoria.
+- `filas_excel`
+- `filas_tienda_ap`
+- `filas_excluidas_no_ap`
+- `valores_excluidos_nombre_1`
+- `control_unidades`
+- `control_venta`
+- `control_calidad`
 
+## Tests de control
 
-## v0.5.1
+- Mayo 2026: 4.780 unidades / $10.576.950
+- Junio 2026: 4.715 unidades / $10.604.240
 
-- Renombra el grupo “Tiendas sin activación/visita” a “Tiendas sin acciones” para mejorar la lectura comercial del análisis comparativo.
+## Instalación
+
+1. Copiar el contenido de esta carpeta sobre `Documents > GitHub > magicshine-bi`.
+2. Reemplazar archivos.
+3. Commit: `v0.5.2 filtro tiendas AP`
+4. Push origin.
