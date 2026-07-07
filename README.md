@@ -1,15 +1,18 @@
-# Magic Shine BI — v0.3.3 KPIs Sebastián
+# Magic Shine BI — v0.4 Impacto día actividad
 
-Corrige y separa la medición operativa de Sebastián.
+Esta versión agrega trazabilidad directa entre actividades de terreno y ventas del mismo día por tienda.
 
-## Cambios
+## Agrega
 
-- Separa **cumplimiento de semanas** y **cumplimiento de volumen**.
-- Calcula la brecha real de activaciones lunes-viernes.
-- Separa activaciones de Sebastián, Agencia y sábados.
-- Agrega tabla semanal con estado Verde / Amarillo / Rojo.
-- Mantiene la lectura del `Diccionario` del archivo de promotores.
+- Nueva pestaña **Impacto día actividad**.
+- Cruce tienda-fecha entre actividades y sell out.
+- Venta del mismo día de actividad.
+- Comparación contra promedio de la misma tienda en días sin actividad dentro del mismo mes.
+- Uplift estimado por tienda-fecha.
+- Separación por Sebastián, Agencia, visita, activación e incentivo.
+- Ranking de productos vendidos en días con actividad.
+- Descarga CSV del detalle tienda-fecha.
 
-## Subida
+## Nota de interpretación
 
-Copiar todo el contenido de esta carpeta dentro del repositorio local `magicshine-bi`, reemplazar archivos, commit y push.
+El cruce mide correlación operacional del día de actividad. No prueba causalidad por sí solo, pero permite evaluar si la actividad genera venta inmediata y dónde conviene concentrar ejecución.

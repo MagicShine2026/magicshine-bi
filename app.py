@@ -27,6 +27,11 @@ daily_sales = getattr(an, "daily_sales", _empty_df)
 field_visit_kpis = getattr(an, "field_visit_kpis", _empty_scorecard)
 store_activation_effect = getattr(an, "store_activation_effect", _empty_df)
 activation_calendar_matrix = getattr(an, "activation_calendar_matrix", _empty_df)
+activity_day_impact = getattr(an, "activity_day_impact", _empty_df)
+activity_day_summary = getattr(an, "activity_day_summary", lambda impact: {})
+activity_day_by_executor = getattr(an, "activity_day_by_executor", _empty_df)
+activity_day_by_store = getattr(an, "activity_day_by_store", _empty_df)
+product_sales_on_activity_days = getattr(an, "product_sales_on_activity_days", _empty_df)
 sebastian_scorecard = getattr(an, "sebastian_scorecard", _empty_scorecard)
 executive_action_plan = getattr(an, "executive_action_plan", _empty_list)
 growth_by_store = getattr(an, "growth_by_store", _empty_df)
@@ -214,11 +219,12 @@ with k5:
 
 st.divider()
 
-tab_exec, tab_sales, tab_rankings, tab_activation, tab_sebastian, tab_plan, tab_quality, tab_download = st.tabs([
+tab_exec, tab_sales, tab_rankings, tab_activation, tab_dayimpact, tab_sebastian, tab_plan, tab_quality, tab_download = st.tabs([
     "📊 Resumen ejecutivo",
     "📈 Ventas",
     "🏆 Rankings",
     "🎯 Activaciones",
+    "💰 Impacto día actividad",
     "👤 KPIs Sebastián",
     "🧭 Plan comercial",
     "🧱 Calidad de datos",
@@ -396,6 +402,129 @@ with tab_activation:
         show = ["fecha", "dia_semana", "tienda_codigo", "tienda_promotores", "comuna", "zona", "activacion_codigo", "activacion_nombre", "tipo_actividad", "estado_actividad", "ejecutor", "horario", "cuenta_activacion", "kpi_sebastian", "kpi_agencia"]
         show = [c for c in show if c in activations.columns]
         st.dataframe(fmt_table(activations[show].sort_values(["fecha", "tienda_codigo"])), use_container_width=True, hide_index=True)
+
+
+with tab_dayimpact:
+    st.subheader("Impacto venta del día de actividad")
+    st.markdown(
+        "<div class='section-note'><b>Lectura:</b> esta pestaña cruza cada actividad registrada con la venta de Magic Shine en la misma tienda y en la misma fecha. No asume causalidad automática; muestra cuánto se vendió ese día y lo compara contra el promedio diario de esa tienda en días sin actividad dentro del mismo mes.</div>",
+        unsafe_allow_html=True,
+    )
+
+    impact_day = activity_day_impact(filtered, activations)
+    if impact_day.empty:
+        st.info("No hay actividades válidas para cruzar con ventas del período filtrado.")
+    else:
+        day_summary = activity_day_summary(impact_day)
+        d1, d2, d3, d4, d5, d6 = st.columns(6)
+        with d1:
+            kpi_card("Días con actividad", integer(day_summary.get("dias_actividad", 0)), "Tienda-fecha únicas")
+        with d2:
+            kpi_card("Actividades", integer(day_summary.get("actividades", 0)), "Marcas registradas")
+        with d3:
+            kpi_card("Venta mismo día", money(day_summary.get("venta_dia", 0)), "Sell out en tienda-fecha")
+        with d4:
+            kpi_card("Unidades mismo día", integer(day_summary.get("unidades_dia", 0)), "Unidades vendidas")
+        with d5:
+            kpi_card("Venta prom. actividad", money(day_summary.get("venta_promedio_actividad", 0)), "Promedio por tienda-fecha")
+        with d6:
+            kpi_card("Uplift estimado", money(day_summary.get("uplift_estimado", 0)), f"{pct(day_summary.get('uplift_pct', 0))} vs referencia")
+
+        if day_summary.get("uplift_estimado", 0) > 0:
+            st.success("En el período filtrado, los días con actividad venden sobre la referencia estimada de tienda/mes.")
+        else:
+            st.warning("En el período filtrado, los días con actividad no superan la referencia estimada de tienda/mes. Revisar ejecución, tienda o mix de productos.")
+
+        c1, c2 = st.columns([1.0, 1.0])
+        with c1:
+            by_exec = activity_day_by_executor(impact_day)
+            st.markdown("#### Venta mismo día por responsable / tipo")
+            if by_exec.empty:
+                st.info("Sin datos por responsable.")
+            else:
+                st.dataframe(
+                    fmt_table(
+                        by_exec,
+                        money_cols=["venta_dia", "venta_promedio_actividad", "uplift_estimado"],
+                        int_cols=["dias_actividad", "actividades", "unidades_dia"],
+                        pct_cols=["dias_con_venta_pct", "uplift_pct"],
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                fig = px.bar(by_exec, x="grupo", y="venta_dia", text_auto=".2s", title="Venta el mismo día por grupo")
+                fig.update_traces(marker_color=BRAND_COLOR)
+                fig.update_layout(height=360, margin=dict(l=10, r=10, t=60, b=10), xaxis_title="")
+                st.plotly_chart(fig, use_container_width=True)
+        with c2:
+            st.markdown("#### Actividades por fecha vs venta mismo día")
+            timeline = (
+                impact_day.groupby("fecha", as_index=False)
+                .agg(venta_dia=("venta_dia", "sum"), actividades=("n_actividades", "sum"), tiendas=("tienda_codigo", "nunique"))
+                .sort_values("fecha")
+            )
+            fig = px.bar(timeline, x="fecha", y="venta_dia", text_auto=".2s", title="Venta en fechas con actividad")
+            fig.update_traces(marker_color=ACCENT_COLOR)
+            fig.update_layout(height=360, margin=dict(l=10, r=10, t=60, b=10), xaxis_title="Fecha")
+            st.plotly_chart(fig, use_container_width=True)
+
+        c3, c4 = st.columns([1.1, 0.9])
+        with c3:
+            st.markdown("#### Tiendas: actividad vs venta del mismo día")
+            by_store_day = activity_day_by_store(impact_day, n=50)
+            if by_store_day.empty:
+                st.info("Sin datos por tienda.")
+            else:
+                st.dataframe(
+                    fmt_table(
+                        by_store_day,
+                        money_cols=["venta_dia", "promedio_referencia", "uplift_estimado", "venta_promedio_dia_actividad"],
+                        int_cols=["dias_actividad", "actividades", "unidades_dia", "dias_con_venta"],
+                        pct_cols=["uplift_pct"],
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+        with c4:
+            st.markdown("#### Productos vendidos en días con actividad")
+            prod_act = product_sales_on_activity_days(filtered, impact_day, n=15)
+            if prod_act.empty:
+                st.info("No hay ventas de producto en días con actividad.")
+            else:
+                st.dataframe(
+                    fmt_table(prod_act, money_cols=["venta"], int_cols=["unidades", "tiendas", "dias_actividad"]),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                fig = px.bar(prod_act.sort_values("venta"), y="producto", x="venta", orientation="h", title="Top productos en días con actividad")
+                fig.update_traces(marker_color=BRAND_COLOR)
+                fig.update_layout(height=450, margin=dict(l=10, r=10, t=60, b=10))
+                st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("#### Detalle tienda-fecha")
+        detail_cols = [
+            "fecha", "dia_semana", "mes", "tienda_codigo", "tienda", "codigos", "detalle_actividad",
+            "ejecutores", "tipos_actividad", "n_actividades", "venta_dia", "unidades_dia",
+            "promedio_referencia", "diferencia_vs_referencia", "uplift_pct", "lectura",
+        ]
+        detail_cols = [c for c in detail_cols if c in impact_day.columns]
+        st.dataframe(
+            fmt_table(
+                impact_day[detail_cols].sort_values(["fecha", "tienda_codigo"]),
+                money_cols=["venta_dia", "promedio_referencia", "diferencia_vs_referencia"],
+                int_cols=["n_actividades", "unidades_dia"],
+                pct_cols=["uplift_pct"],
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        st.download_button(
+            "Descargar impacto tienda-fecha CSV",
+            impact_day.to_csv(index=False).encode("utf-8-sig"),
+            file_name="impacto_actividad_mismo_dia.csv",
+            mime="text/csv",
+        )
 
 
 with tab_sebastian:

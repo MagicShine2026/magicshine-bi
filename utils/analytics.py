@@ -595,3 +595,204 @@ def executive_action_plan(df: pd.DataFrame, activations: pd.DataFrame) -> list[d
         actions.append({"prioridad": "Media", "tema": "Producto", "accion": f"Usar el producto líder ({lead['producto']}) como gancho de demostración y cross-sell en activaciones."})
 
     return actions
+
+
+def _unique_join(values) -> str:
+    vals = [str(v).strip() for v in values if str(v).strip() and str(v).strip().lower() not in {"nan", "none"}]
+    return ", ".join(sorted(set(vals)))
+
+
+def _activity_flags(act: pd.DataFrame) -> pd.DataFrame:
+    """Normaliza flags para actividades de terreno usando el diccionario si existe."""
+    if act is None or act.empty:
+        return pd.DataFrame()
+    out = valid_activities(act).copy()
+    if out.empty:
+        return out
+    out["fecha"] = pd.to_datetime(out["fecha"]).dt.normalize()
+    out["actividad_terreno"] = out.apply(classify_activity_row, axis=1)
+    ejecutor = out.get("ejecutor", pd.Series("", index=out.index)).astype(str).str.lower()
+    tipo = out.get("tipo_actividad", pd.Series("", index=out.index)).astype(str).str.lower()
+    cuenta_activacion = _yes_series(out.get("cuenta_activacion", pd.Series("No", index=out.index)))
+    kpi_sebastian = _yes_series(out.get("kpi_sebastian", pd.Series("No", index=out.index)))
+    kpi_agencia = _yes_series(out.get("kpi_agencia", pd.Series("No", index=out.index)))
+    out["es_sebastian"] = kpi_sebastian | ejecutor.str.contains("sebasti", na=False)
+    out["es_agencia"] = kpi_agencia | ejecutor.str.contains("agencia", na=False)
+    out["es_visita"] = tipo.str.contains("visita", na=False)
+    out["es_incentivo"] = tipo.str.contains("incentivo|galleta", regex=True, na=False) | out.get("activacion_codigo", pd.Series("", index=out.index)).astype(str).str.upper().str.contains("G", na=False)
+    out["es_activacion"] = cuenta_activacion | tipo.str.contains("activaci", na=False)
+    out["grupo_ejecutor"] = np.select(
+        [out["es_sebastian"] & out["es_agencia"], out["es_sebastian"], out["es_agencia"]],
+        ["Mixto", "Sebastián", "Agencia"],
+        default="Sin clasificar",
+    )
+    out["grupo_tipo"] = np.select(
+        [out["es_activacion"] & out["es_visita"], out["es_activacion"], out["es_visita"] & out["es_incentivo"], out["es_visita"]],
+        ["Activación + visita", "Activación", "Visita con incentivo", "Visita comercial"],
+        default="Otra actividad",
+    )
+    return out
+
+
+def activity_day_impact(sales: pd.DataFrame, activations: pd.DataFrame) -> pd.DataFrame:
+    """Traza actividad de terreno vs venta del mismo día por tienda.
+
+    La unidad de análisis es tienda-fecha. El indicador principal es venta_dia: venta
+    registrada en esa tienda exactamente el día de la actividad. Como referencia, se calcula
+    el promedio diario de la misma tienda en días sin actividad dentro del mismo mes.
+    """
+    if sales is None or sales.empty or activations is None or activations.empty:
+        return pd.DataFrame()
+
+    sales_day = sales.copy()
+    sales_day["fecha"] = pd.to_datetime(sales_day["fecha"]).dt.normalize()
+    sales_day = (
+        sales_day.groupby(["tienda_codigo", "tienda", "fecha", "mes", "dia_semana"], as_index=False)
+        .agg(venta_dia=("venta", "sum"), unidades_dia=("unidades", "sum"), skus_dia=("sku", "nunique"))
+    )
+
+    act = _activity_flags(activations)
+    if act.empty:
+        return pd.DataFrame()
+
+    # Agregamos múltiples marcas en la misma tienda-fecha en una sola actividad comercial del día.
+    act_day = (
+        act.groupby(["tienda_codigo", "fecha"], as_index=False)
+        .agg(
+            tienda_promotores=("tienda_promotores", "first"),
+            comuna=("comuna", "first"),
+            zona=("zona", "first"),
+            n_actividades=("activacion_codigo", "count"),
+            codigos=("activacion_codigo", _unique_join),
+            detalle_actividad=("activacion_nombre", _unique_join),
+            ejecutores=("ejecutor", _unique_join),
+            tipos_actividad=("tipo_actividad", _unique_join),
+            grupo_ejecutor=("grupo_ejecutor", _unique_join),
+            grupo_tipo=("grupo_tipo", _unique_join),
+            tiene_sebastian=("es_sebastian", "max"),
+            tiene_agencia=("es_agencia", "max"),
+            tiene_visita=("es_visita", "max"),
+            tiene_activacion=("es_activacion", "max"),
+            tiene_incentivo=("es_incentivo", "max"),
+        )
+    )
+
+    out = act_day.merge(sales_day, on=["tienda_codigo", "fecha"], how="left")
+    out["venta_dia"] = out["venta_dia"].fillna(0)
+    out["unidades_dia"] = out["unidades_dia"].fillna(0)
+    out["skus_dia"] = out["skus_dia"].fillna(0)
+    out["tienda"] = out["tienda"].fillna(out["tienda_promotores"])
+    out["mes"] = out["mes"].fillna(out["fecha"].dt.strftime("%Y-%m"))
+    if "dia_semana" not in out.columns or out["dia_semana"].isna().any():
+        out["dia_semana"] = out["fecha"].dt.dayofweek.map({0:"Lunes",1:"Martes",2:"Miércoles",3:"Jueves",4:"Viernes",5:"Sábado",6:"Domingo"})
+    else:
+        out["dia_semana"] = out["dia_semana"].fillna(out["fecha"].dt.dayofweek.map({0:"Lunes",1:"Martes",2:"Miércoles",3:"Jueves",4:"Viernes",5:"Sábado",6:"Domingo"}))
+
+    # Baseline: promedio de venta diaria de la misma tienda/mes en días con venta y sin actividad.
+    activity_keys = act_day[["tienda_codigo", "fecha"]].drop_duplicates().assign(con_actividad=1)
+    baseline_base = sales_day.merge(activity_keys, on=["tienda_codigo", "fecha"], how="left")
+    baseline_base["con_actividad"] = baseline_base["con_actividad"].fillna(0)
+    baseline_store = (
+        baseline_base[baseline_base["con_actividad"].eq(0)]
+        .groupby(["tienda_codigo", "mes"], as_index=False)
+        .agg(promedio_tienda_sin_actividad=("venta_dia", "mean"), dias_base_tienda=("fecha", "nunique"))
+    )
+    baseline_global = (
+        baseline_base[baseline_base["con_actividad"].eq(0)]
+        .groupby("mes", as_index=False)
+        .agg(promedio_general_sin_actividad=("venta_dia", "mean"), dias_base_general=("fecha", "nunique"))
+    )
+    out = out.merge(baseline_store, on=["tienda_codigo", "mes"], how="left")
+    out = out.merge(baseline_global, on="mes", how="left")
+    out["promedio_referencia"] = out["promedio_tienda_sin_actividad"].fillna(out["promedio_general_sin_actividad"]).fillna(0)
+    out["dias_base_tienda"] = out["dias_base_tienda"].fillna(0)
+    out["diferencia_vs_referencia"] = out["venta_dia"] - out["promedio_referencia"]
+    out["uplift_pct"] = np.where(out["promedio_referencia"] > 0, out["diferencia_vs_referencia"] / out["promedio_referencia"] * 100, 0)
+    out["actividad_con_venta"] = np.where(out["venta_dia"] > 0, "Sí", "No")
+    out["lectura"] = np.select(
+        [out["venta_dia"].eq(0), out["diferencia_vs_referencia"].gt(0), out["diferencia_vs_referencia"].lt(0)],
+        ["Sin venta el día de actividad", "Sobre promedio tienda/mes", "Bajo promedio tienda/mes"],
+        default="En línea con promedio",
+    )
+    out = out.sort_values(["fecha", "tienda_codigo"]).reset_index(drop=True)
+    return out
+
+
+def activity_day_summary(impact: pd.DataFrame) -> dict[str, float | int]:
+    if impact is None or impact.empty:
+        return {"dias_actividad": 0, "actividades": 0, "venta_dia": 0, "unidades_dia": 0, "venta_promedio_actividad": 0, "dias_con_venta_pct": 0, "uplift_estimado": 0, "uplift_pct": 0}
+    dias = int(len(impact))
+    venta = float(impact["venta_dia"].sum())
+    unidades = float(impact["unidades_dia"].sum())
+    actividades = int(impact["n_actividades"].sum())
+    dias_con_venta = int((impact["venta_dia"] > 0).sum())
+    uplift = float(impact["diferencia_vs_referencia"].sum())
+    ref = float(impact["promedio_referencia"].sum())
+    return {
+        "dias_actividad": dias,
+        "actividades": actividades,
+        "venta_dia": venta,
+        "unidades_dia": unidades,
+        "venta_promedio_actividad": safe_div(venta, dias),
+        "dias_con_venta_pct": safe_div(dias_con_venta, dias) * 100,
+        "uplift_estimado": uplift,
+        "uplift_pct": safe_div(uplift, ref) * 100 if ref else 0,
+    }
+
+
+def activity_day_by_executor(impact: pd.DataFrame) -> pd.DataFrame:
+    if impact is None or impact.empty:
+        return pd.DataFrame()
+    rows = []
+    for label, mask in {
+        "Sebastián": impact["tiene_sebastian"].astype(bool),
+        "Agencia": impact["tiene_agencia"].astype(bool),
+        "Visita comercial": impact["tiene_visita"].astype(bool),
+        "Activación": impact["tiene_activacion"].astype(bool),
+        "Con incentivo": impact["tiene_incentivo"].astype(bool),
+    }.items():
+        sub = impact[mask]
+        if sub.empty:
+            continue
+        s = activity_day_summary(sub)
+        rows.append({"grupo": label, **s})
+    return pd.DataFrame(rows)
+
+
+def activity_day_by_store(impact: pd.DataFrame, n: int = 30) -> pd.DataFrame:
+    if impact is None or impact.empty:
+        return pd.DataFrame()
+    out = (
+        impact.groupby(["tienda_codigo", "tienda"], as_index=False)
+        .agg(
+            dias_actividad=("fecha", "nunique"),
+            actividades=("n_actividades", "sum"),
+            venta_dia=("venta_dia", "sum"),
+            unidades_dia=("unidades_dia", "sum"),
+            promedio_referencia=("promedio_referencia", "sum"),
+            uplift_estimado=("diferencia_vs_referencia", "sum"),
+            dias_con_venta=("actividad_con_venta", lambda s: (s == "Sí").sum()),
+            primera_fecha=("fecha", "min"),
+            ultima_fecha=("fecha", "max"),
+        )
+    )
+    out["uplift_pct"] = np.where(out["promedio_referencia"] > 0, out["uplift_estimado"] / out["promedio_referencia"] * 100, 0)
+    out["venta_promedio_dia_actividad"] = out["venta_dia"] / out["dias_actividad"].replace(0, np.nan)
+    return out.sort_values("uplift_estimado", ascending=False).head(n).fillna(0)
+
+
+def product_sales_on_activity_days(sales: pd.DataFrame, impact: pd.DataFrame, n: int = 20) -> pd.DataFrame:
+    if sales is None or sales.empty or impact is None or impact.empty:
+        return pd.DataFrame()
+    keys = impact[["tienda_codigo", "fecha"]].drop_duplicates()
+    sales2 = sales.copy()
+    sales2["fecha"] = pd.to_datetime(sales2["fecha"]).dt.normalize()
+    act_sales = sales2.merge(keys, on=["tienda_codigo", "fecha"], how="inner")
+    if act_sales.empty:
+        return pd.DataFrame()
+    return (
+        act_sales.groupby(["sku", "producto", "categoria"], as_index=False)
+        .agg(venta=("venta", "sum"), unidades=("unidades", "sum"), tiendas=("tienda_codigo", "nunique"), dias_actividad=("fecha", "nunique"))
+        .sort_values("venta", ascending=False)
+        .head(n)
+    )
