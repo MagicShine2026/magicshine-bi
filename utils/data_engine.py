@@ -724,7 +724,292 @@ def enrich_sales_with_activations(sales: pd.DataFrame, activations: pd.DataFrame
     return out
 
 
-def build_master_dataset(sellout_files: Iterable[Any], promoter_file: Any | None = None) -> dict[str, pd.DataFrame]:
+
+# -----------------------------
+# Fichas de visita y contenido
+# -----------------------------
+
+def _read_sheet_with_detected_header(xls: pd.ExcelFile, sheet_name: str, required_terms: list[str], max_rows: int = 15) -> pd.DataFrame:
+    raw = pd.read_excel(xls, sheet_name=sheet_name, header=None)
+    header_row = None
+    targets = [norm_key(t) for t in required_terms]
+    for idx in range(min(max_rows, len(raw))):
+        row_keys = [norm_key(x) for x in raw.iloc[idx].tolist()]
+        joined = "|".join(row_keys)
+        if all(t in joined for t in targets):
+            header_row = idx
+            break
+    if header_row is None:
+        return pd.DataFrame()
+    df = pd.read_excel(xls, sheet_name=sheet_name, header=header_row)
+    df.columns = [clean_text(c) for c in df.columns]
+    return df.dropna(how="all")
+
+
+def _find_column(df: pd.DataFrame, aliases: list[str]) -> str | None:
+    if df is None or df.empty:
+        return None
+    targets = [norm_key(a) for a in aliases]
+    # Primero coincidencia exacta para evitar que "Tienda" tome "Cod Tienda".
+    for col in df.columns:
+        key = norm_key(col)
+        if key in targets:
+            return col
+    # Luego coincidencia parcial para tolerar variaciones de encabezado.
+    for col in df.columns:
+        key = norm_key(col)
+        if any(t and t in key for t in targets):
+            return col
+    return None
+
+
+def _series_text(df: pd.DataFrame, col: str | None) -> pd.Series:
+    if col is None or col not in df.columns:
+        return pd.Series([""] * len(df), index=df.index, dtype="object")
+    return df[col].apply(clean_text)
+
+
+def _series_num(df: pd.DataFrame, col: str | None) -> pd.Series:
+    if col is None or col not in df.columns:
+        return pd.Series([0.0] * len(df), index=df.index, dtype="float")
+    return pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+
+
+def _is_yes(value: Any) -> bool:
+    return norm_key(value) in {"SI", "S", "YES", "Y", "TRUE", "VERDADERO", "1", "X"}
+
+
+def _nonempty_count(row: pd.Series, cols: list[str]) -> int:
+    count = 0
+    for col in cols:
+        if col in row.index and clean_text(row[col]):
+            count += 1
+    return count
+
+
+def read_visits_file(file: Any | None) -> tuple[pd.DataFrame, dict[str, Any], list[FileIssue]]:
+    """Lee la plantilla de visitas de Sebastián.
+
+    Diseñada para la hoja "02. Base de Datos" de la plantilla actual, pero tolera
+    cambios menores si mantiene columnas como Fecha, Cod Tienda y Tienda.
+    """
+    if file is None:
+        return pd.DataFrame(), {}, []
+    source = file_name(file)
+    issues: list[FileIssue] = []
+    xls = pd.ExcelFile(file)
+
+    sheet_name = None
+    for s in xls.sheet_names:
+        key = norm_key(s)
+        if "BASEDATOS" in key:
+            sheet_name = s
+            break
+    if sheet_name is None:
+        # fallback: first sheet with required headers
+        for s in xls.sheet_names:
+            candidate = _read_sheet_with_detected_header(xls, s, ["fecha", "tienda"], max_rows=20)
+            if not candidate.empty:
+                sheet_name = s
+                df_raw = candidate
+                break
+        else:
+            issues.append(FileIssue(source, "Ficha visitas", "Error", "No se encontró hoja Base de Datos ni encabezados Fecha/Tienda."))
+            return pd.DataFrame(), {}, issues
+    else:
+        df_raw = _read_sheet_with_detected_header(xls, sheet_name, ["fecha", "tienda"], max_rows=20)
+        if df_raw.empty:
+            df_raw = pd.read_excel(xls, sheet_name=sheet_name)
+            df_raw.columns = [clean_text(c) for c in df_raw.columns]
+            df_raw = df_raw.dropna(how="all")
+
+    if df_raw.empty:
+        issues.append(FileIssue(source, "Ficha visitas", "Advertencia", "La hoja de visitas está vacía."))
+        return pd.DataFrame(), {}, issues
+
+    fecha_col = _find_column(df_raw, ["Fecha"])
+    code_col = _find_column(df_raw, ["Cod Tienda", "Código Tienda", "Cod tienda", "Codigo Tienda"])
+    tienda_col = _find_column(df_raw, ["Tienda"])
+    comuna_col = _find_column(df_raw, ["Comuna"])
+    jefe_col = _find_column(df_raw, ["Jefe de Tienda"])
+    ejecutivo_col = _find_column(df_raw, ["Ejecutivo"])
+    ventas_total_col = _find_column(df_raw, ["Ventas Total Tienda"])
+    ventas_pasillo_col = _find_column(df_raw, ["Ventas Pasillo 5"])
+    activaciones_col = _find_column(df_raw, ["Activaciones"])
+    concursos_col = _find_column(df_raw, ["Concursos"])
+    apoyo_col = _find_column(df_raw, ["Apoyo a Vendedores"])
+    foto_pasillo_col = _find_column(df_raw, ["Link Foto Pasillo"])
+    foto_exhibidor_col = _find_column(df_raw, ["Link Foto Exhibidor"])
+    idea_col = _find_column(df_raw, ["Idea Jefe Tienda"])
+    notas_col = _find_column(df_raw, ["Notas"])
+    pendiente_col = _find_column(df_raw, ["¿Quedó Pendiente?", "Quedó Pendiente", "Quedo Pendiente"])
+    detalle_pend_col = _find_column(df_raw, ["Detalle Pendiente"])
+    vendedor_col = _find_column(df_raw, ["Vendedor Clave"])
+    conoce_col = _find_column(df_raw, ["¿Conoce MagicShine?", "Conoce MagicShine"])
+    reposicion_col = _find_column(df_raw, ["Días Reposición", "Dias Reposicion"])
+    reposicion_det_col = _find_column(df_raw, ["Reposición Detalle", "Reposicion Detalle"])
+
+    if fecha_col is None or tienda_col is None:
+        issues.append(FileIssue(source, "Ficha visitas", "Error", "La ficha debe incluir al menos Fecha y Tienda."))
+        return pd.DataFrame(), {}, issues
+
+    out = pd.DataFrame()
+    out["fecha"] = pd.to_datetime(df_raw[fecha_col], errors="coerce").dt.normalize()
+    out["mes"] = out["fecha"].dt.strftime("%Y-%m")
+    out["dia_semana"] = out["fecha"].dt.weekday.map(WEEKDAY_ES)
+    out["tienda_codigo"] = _series_text(df_raw, code_col).str.upper()
+    out["tienda"] = _series_text(df_raw, tienda_col)
+    out["comuna"] = _series_text(df_raw, comuna_col)
+    out["jefe_tienda"] = _series_text(df_raw, jefe_col)
+    out["ejecutivo"] = _series_text(df_raw, ejecutivo_col)
+    out["ventas_total_tienda"] = _series_num(df_raw, ventas_total_col)
+    out["ventas_pasillo_5"] = _series_num(df_raw, ventas_pasillo_col)
+    out["activaciones_competencia"] = _series_text(df_raw, activaciones_col)
+    out["concursos_competencia"] = _series_text(df_raw, concursos_col)
+    out["apoyo_vendedores_competencia"] = _series_text(df_raw, apoyo_col)
+    out["link_foto_pasillo"] = _series_text(df_raw, foto_pasillo_col)
+    out["link_foto_exhibidor"] = _series_text(df_raw, foto_exhibidor_col)
+    out["idea_jefe_tienda"] = _series_text(df_raw, idea_col)
+    out["notas"] = _series_text(df_raw, notas_col)
+    out["pendiente"] = _series_text(df_raw, pendiente_col)
+    out["detalle_pendiente"] = _series_text(df_raw, detalle_pend_col)
+    out["vendedor_clave"] = _series_text(df_raw, vendedor_col)
+    out["conoce_magicshine"] = _series_text(df_raw, conoce_col)
+    out["dias_reposicion"] = _series_text(df_raw, reposicion_col)
+    out["reposicion_detalle"] = _series_text(df_raw, reposicion_det_col)
+
+    quiebre_cols = [c for c in df_raw.columns if "QUIEBRE" in norm_key(c)]
+    riesgo_cols = [c for c in df_raw.columns if "RIESGO" in norm_key(c) and "CANT" not in norm_key(c)]
+    sobre_cols = [c for c in df_raw.columns if "SOBRESTOCK" in norm_key(c) or norm_key(c).startswith("SOBRESTOCK") or "SOBRESTOCK" in norm_key(c).replace(" ", "")]
+    if not sobre_cols:
+        sobre_cols = [c for c in df_raw.columns if norm_key(c).startswith("SOBRESTOCK") or norm_key(c).startswith("SOBRESTOCK") or "SOBRESTOCK" in norm_key(c)]
+    # La plantilla usa "Sobre Stock".
+    sobre_cols = sorted(set(sobre_cols + [c for c in df_raw.columns if "SOBRESTOCK" in norm_key(c) or "SOBRESTOCK" in norm_key(c).replace(" ", "") or norm_key(c).startswith("SOBRESTOCK") or norm_key(c).startswith("SOBRESTOCK")]))
+    sobre_cols = sorted(set(sobre_cols + [c for c in df_raw.columns if norm_key(c).startswith("SOBRESTOCK") or norm_key(c).startswith("SOBRESTOCK") or "SOBRESTOCK" in norm_key(c)]))
+    # Fallback explícito para encabezados "Sobre Stock".
+    sobre_cols = sorted(set(sobre_cols + [c for c in df_raw.columns if norm_key(c).startswith("SOBRESTOCK") or norm_key(c) in {"SOBRESTOCK1", "SOBRESTOCK2"}]))
+
+    out["quiebres_detectados"] = df_raw.apply(lambda r: _nonempty_count(r, quiebre_cols), axis=1) if quiebre_cols else 0
+    out["riesgos_detectados"] = df_raw.apply(lambda r: _nonempty_count(r, riesgo_cols), axis=1) if riesgo_cols else 0
+    out["sobrestock_detectado"] = df_raw.apply(lambda r: _nonempty_count(r, sobre_cols), axis=1) if sobre_cols else 0
+    out["tiene_pendiente"] = out["pendiente"].apply(_is_yes) | out["detalle_pendiente"].astype(str).str.strip().ne("")
+    out["tiene_fotos"] = out["link_foto_pasillo"].astype(str).str.strip().ne("") | out["link_foto_exhibidor"].astype(str).str.strip().ne("")
+    out["conoce_magicshine_si"] = out["conoce_magicshine"].apply(_is_yes)
+    out["tiene_vendedor_clave"] = out["vendedor_clave"].astype(str).str.strip().ne("")
+
+    critical_cols = [
+        "fecha", "tienda", "ejecutivo", "jefe_tienda", "activaciones_competencia",
+        "concursos_competencia", "apoyo_vendedores_competencia", "notas", "pendiente",
+        "vendedor_clave", "conoce_magicshine", "link_foto_pasillo", "link_foto_exhibidor",
+    ]
+    present_counts = []
+    for _, row in out.iterrows():
+        count = 0
+        for col in critical_cols:
+            if col in out.columns:
+                val = row[col]
+                if isinstance(val, pd.Timestamp) and not pd.isna(val):
+                    count += 1
+                elif clean_text(val):
+                    count += 1
+        present_counts.append(count)
+    out["completitud_pct"] = np.array(present_counts) / len(critical_cols) * 100
+    out["calidad_ficha"] = np.select(
+        [out["completitud_pct"] >= 70, out["completitud_pct"] >= 45],
+        ["Alta", "Media"],
+        default="Baja",
+    )
+    out["archivo_origen"] = source
+    out = out[out["fecha"].notna() & out["tienda"].astype(str).str.strip().ne("")].copy()
+
+    report = {
+        "archivo": source,
+        "tipo": "Ficha visitas",
+        "estado": "OK",
+        "filas_excel": int(len(df_raw)),
+        "registros_generados": int(len(out)),
+        "hoja": sheet_name,
+        "fecha_min": out["fecha"].min().strftime("%Y-%m-%d") if not out.empty else "",
+        "fecha_max": out["fecha"].max().strftime("%Y-%m-%d") if not out.empty else "",
+        "tiendas": int(out["tienda_codigo"].replace("", np.nan).nunique()) if not out.empty else 0,
+    }
+    return out.reset_index(drop=True), report, issues
+
+
+def read_content_file(file: Any | None = None, workbook_file: Any | None = None) -> tuple[pd.DataFrame, dict[str, Any], list[FileIssue]]:
+    """Lee una planilla simple de contenido o una hoja Contenido dentro de otro workbook.
+
+    Formato recomendado: Fecha | Tienda | Tipo contenido | Link | Estado | Aprobado
+    """
+    source_obj = file if file is not None else workbook_file
+    if source_obj is None:
+        return pd.DataFrame(), {}, []
+    source = file_name(source_obj)
+    issues: list[FileIssue] = []
+    try:
+        xls = pd.ExcelFile(source_obj)
+    except Exception as exc:
+        return pd.DataFrame(), {}, [FileIssue(source, "Contenido", "Error", str(exc))]
+
+    sheet_name = None
+    for s in xls.sheet_names:
+        key = norm_key(s)
+        if "CONTENIDO" in key or "RRSS" in key or "UGC" in key:
+            sheet_name = s
+            break
+    if sheet_name is None and file is not None:
+        sheet_name = xls.sheet_names[0]
+    if sheet_name is None:
+        return pd.DataFrame(), {}, []
+
+    df_raw = _read_sheet_with_detected_header(xls, sheet_name, ["fecha", "tienda"], max_rows=20)
+    if df_raw.empty:
+        # For optional content, silently return empty if sheet exists but no expected format.
+        if file is not None:
+            issues.append(FileIssue(source, "Contenido", "Advertencia", "No se reconoció el formato. Usa: Fecha, Tienda, Tipo contenido, Link, Estado, Aprobado."))
+        return pd.DataFrame(), {}, issues
+
+    fecha_col = _find_column(df_raw, ["Fecha"])
+    tienda_col = _find_column(df_raw, ["Tienda"])
+    tipo_col = _find_column(df_raw, ["Tipo contenido", "Tipo", "Contenido"])
+    link_col = _find_column(df_raw, ["Link", "URL", "Enlace"])
+    estado_col = _find_column(df_raw, ["Estado"])
+    aprobado_col = _find_column(df_raw, ["Aprobado", "Aprobada"])
+    tienda_codigo_col = _find_column(df_raw, ["Cod Tienda", "Código Tienda", "Codigo Tienda"])
+
+    out = pd.DataFrame()
+    out["fecha"] = pd.to_datetime(df_raw[fecha_col], errors="coerce").dt.normalize() if fecha_col else pd.NaT
+    out["mes"] = out["fecha"].dt.strftime("%Y-%m")
+    out["tienda_codigo"] = _series_text(df_raw, tienda_codigo_col).str.upper()
+    out["tienda"] = _series_text(df_raw, tienda_col)
+    out["tipo_contenido"] = _series_text(df_raw, tipo_col)
+    out["link"] = _series_text(df_raw, link_col)
+    out["estado"] = _series_text(df_raw, estado_col)
+    out["aprobado"] = _series_text(df_raw, aprobado_col)
+    out["aprobado_bool"] = out["aprobado"].apply(_is_yes)
+    out["entregado_bool"] = out["estado"].apply(lambda x: norm_key(x) in {"ENTREGADO", "APROBADO", "PUBLICADO", "LISTO"})
+    out["archivo_origen"] = source
+    out = out[out["fecha"].notna() & out["tienda"].astype(str).str.strip().ne("")].copy()
+
+    report = {
+        "archivo": source,
+        "tipo": "Contenido terreno",
+        "estado": "OK",
+        "filas_excel": int(len(df_raw)),
+        "registros_generados": int(len(out)),
+        "hoja": sheet_name,
+        "fecha_min": out["fecha"].min().strftime("%Y-%m-%d") if not out.empty else "",
+        "fecha_max": out["fecha"].max().strftime("%Y-%m-%d") if not out.empty else "",
+        "tiendas": int(out["tienda"].replace("", np.nan).nunique()) if not out.empty else 0,
+    }
+    return out.reset_index(drop=True), report, issues
+
+def build_master_dataset(
+    sellout_files: Iterable[Any],
+    promoter_file: Any | None = None,
+    visits_file: Any | None = None,
+    content_file: Any | None = None,
+) -> dict[str, pd.DataFrame]:
     sales, sellout_report, sellout_issues = read_sellout_files(sellout_files)
 
     activations = pd.DataFrame()
@@ -738,18 +1023,43 @@ def build_master_dataset(sellout_files: Iterable[Any], promoter_file: Any | None
         except Exception as exc:
             promoter_issues = pd.DataFrame([FileIssue(file_name(promoter_file), "Promotores", "Error", str(exc)).__dict__])
 
+    visits = pd.DataFrame()
+    visits_report = pd.DataFrame()
+    visits_issues = pd.DataFrame()
+    if visits_file is not None:
+        try:
+            visits, report, issues = read_visits_file(visits_file)
+            visits_report = pd.DataFrame([report]) if report else pd.DataFrame()
+            visits_issues = pd.DataFrame([i.__dict__ for i in issues])
+        except Exception as exc:
+            visits_issues = pd.DataFrame([FileIssue(file_name(visits_file), "Ficha visitas", "Error", str(exc)).__dict__])
+
+    content = pd.DataFrame()
+    content_report = pd.DataFrame()
+    content_issues = pd.DataFrame()
+    # Permite planilla separada de contenido o una hoja Contenido dentro de la ficha de visitas.
+    content_source = content_file if content_file is not None else visits_file
+    if content_source is not None:
+        try:
+            content, report, issues = read_content_file(content_file, visits_file if content_file is None else None)
+            content_report = pd.DataFrame([report]) if report else pd.DataFrame()
+            content_issues = pd.DataFrame([i.__dict__ for i in issues])
+        except Exception as exc:
+            content_issues = pd.DataFrame([FileIssue(file_name(content_source), "Contenido", "Error", str(exc)).__dict__])
+
     master = enrich_sales_with_activations(sales, activations)
-    quality = pd.concat([sellout_report, promoter_report], ignore_index=True) if not sellout_report.empty or not promoter_report.empty else pd.DataFrame()
-    issues = pd.concat([sellout_issues, promoter_issues], ignore_index=True) if not sellout_issues.empty or not promoter_issues.empty else pd.DataFrame(columns=["archivo", "tipo", "estado", "detalle"])
+    quality = pd.concat([sellout_report, promoter_report, visits_report, content_report], ignore_index=True) if any(not x.empty for x in [sellout_report, promoter_report, visits_report, content_report]) else pd.DataFrame()
+    issues = pd.concat([sellout_issues, promoter_issues, visits_issues, content_issues], ignore_index=True) if any(not x.empty for x in [sellout_issues, promoter_issues, visits_issues, content_issues]) else pd.DataFrame(columns=["archivo", "tipo", "estado", "detalle"])
 
     return {
         "ventas": sales,
         "activaciones": activations,
+        "visitas": visits,
+        "contenido": content,
         "master": master,
         "calidad": quality,
         "issues": issues,
     }
-
 
 def kpi_summary(df: pd.DataFrame) -> dict[str, float | int]:
     if df is None or df.empty:

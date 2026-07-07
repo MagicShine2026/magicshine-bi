@@ -1,18 +1,22 @@
-# Magic Shine BI — v0.4 Impacto día actividad
+# Magic Shine BI — v0.5 Impacto Sebastián
 
-Esta versión agrega trazabilidad directa entre actividades de terreno y ventas del mismo día por tienda.
+Versión enfocada en evaluar a Sebastián según las 3 familias KPI del cargo:
 
-## Agrega
+1. **Sell Out tiendas asignadas (40%)**
+   - Activación PM / lunes-viernes Sebastián vs venta del mismo día.
+   - Visita comercial Sebastián vs venta del mismo día.
+   - Activación sábado Agencia como benchmark separado.
+   - Comparación contra promedio de la misma tienda en días sin actividad.
 
-- Nueva pestaña **Impacto día actividad**.
-- Cruce tienda-fecha entre actividades y sell out.
-- Venta del mismo día de actividad.
-- Comparación contra promedio de la misma tienda en días sin actividad dentro del mismo mes.
-- Uplift estimado por tienda-fecha.
-- Separación por Sebastián, Agencia, visita, activación e incentivo.
-- Ranking de productos vendidos en días con actividad.
-- Descarga CSV del detalle tienda-fecha.
+2. **Creación de contenido (30%)**
+   - Módulo preparado para cargar una planilla simple: `Fecha`, `Tienda`, `Tipo contenido`, `Link`, `Estado`, `Aprobado`.
+   - También puede venir como hoja `Contenido` dentro de la plantilla de visitas.
+   - Los archivos se procesan en memoria y no se guardan en GitHub ni en Streamlit.
 
-## Nota de interpretación
+3. **Métricas e información comercial (30%)**
+   - Lectura de la plantilla de visitas de Sebastián.
+   - KPIs de fichas completas, tiendas visitadas, quiebres, riesgos, sobrestock, pendientes, fotos, vendedor clave y conocimiento Magic Shine.
 
-El cruce mide correlación operacional del día de actividad. No prueba causalidad por sí solo, pero permite evaluar si la actividad genera venta inmediata y dónde conviene concentrar ejecución.
+## Archivos confidenciales
+
+No subir Excel reales al repositorio. El dashboard los recibe desde la interfaz de Streamlit y los procesa en memoria.

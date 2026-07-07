@@ -765,7 +765,7 @@ def activity_day_by_store(impact: pd.DataFrame, n: int = 30) -> pd.DataFrame:
     out = (
         impact.groupby(["tienda_codigo", "tienda"], as_index=False)
         .agg(
-            dias_actividad=("fecha", "nunique"),
+            dias_actividad=("fecha", "count"),
             actividades=("n_actividades", "sum"),
             venta_dia=("venta_dia", "sum"),
             unidades_dia=("unidades_dia", "sum"),
@@ -796,3 +796,134 @@ def product_sales_on_activity_days(sales: pd.DataFrame, impact: pd.DataFrame, n:
         .sort_values("venta", ascending=False)
         .head(n)
     )
+
+# -----------------------------
+# Evaluación Sebastián por familias KPI
+# -----------------------------
+
+def sebastian_commercial_impact(impact: pd.DataFrame) -> dict[str, pd.DataFrame | dict]:
+    """Resume actividad vs venta mismo día en las tres bolsas relevantes.
+
+    Bolsas:
+    - Sebastián activación PM/L-V: actividades MSH/MSHG o activación de Sebastián fuera de sábado.
+    - Sebastián visitas: VC/VCG.
+    - Agencia sábado: MS u otras activaciones de agencia en sábado.
+    """
+    if impact is None or impact.empty:
+        empty = pd.DataFrame()
+        return {"summary": {}, "groups": empty, "detail": empty, "top_positive": empty, "top_negative": empty}
+    df = impact.copy()
+    for col in ["tiene_sebastian", "tiene_agencia", "tiene_visita", "tiene_activacion", "tiene_incentivo"]:
+        if col not in df.columns:
+            df[col] = False
+    df["codigo_norm"] = df.get("codigos", "").astype(str).str.upper()
+
+    conditions = [
+        (df["tiene_sebastian"].astype(bool) & df["tiene_activacion"].astype(bool) & ~df["dia_semana"].eq("Sábado")),
+        (df["tiene_sebastian"].astype(bool) & df["tiene_visita"].astype(bool)),
+        (df["tiene_agencia"].astype(bool) & df["tiene_activacion"].astype(bool) & df["dia_semana"].eq("Sábado")),
+    ]
+    labels = ["Sebastián activación PM/L-V", "Sebastián visita comercial", "Agencia sábado"]
+    df["bolsa_kpi"] = np.select(conditions, labels, default="Otra actividad")
+    df_eval = df[df["bolsa_kpi"].ne("Otra actividad")].copy()
+    if df_eval.empty:
+        empty = pd.DataFrame()
+        return {"summary": {}, "groups": empty, "detail": empty, "top_positive": empty, "top_negative": empty}
+
+    groups = (
+        df_eval.groupby("bolsa_kpi", as_index=False)
+        .agg(
+            dias_actividad=("fecha", "count"),
+            actividades=("n_actividades", "sum"),
+            tiendas=("tienda_codigo", "nunique"),
+            venta_dia=("venta_dia", "sum"),
+            unidades_dia=("unidades_dia", "sum"),
+            dias_con_venta=("actividad_con_venta", lambda s: (s == "Sí").sum()),
+            uplift_estimado=("diferencia_vs_referencia", "sum"),
+            promedio_referencia=("promedio_referencia", "mean"),
+        )
+    )
+    groups["dias_con_venta_pct"] = np.where(groups["dias_actividad"] > 0, groups["dias_con_venta"] / groups["dias_actividad"] * 100, 0)
+    groups["venta_promedio_dia"] = np.where(groups["dias_actividad"] > 0, groups["venta_dia"] / groups["dias_actividad"], 0)
+    groups["uplift_pct"] = np.where(groups["promedio_referencia"] > 0, groups["uplift_estimado"] / (groups["promedio_referencia"] * groups["dias_actividad"]) * 100, 0)
+
+    def row_for(label: str) -> dict:
+        row = groups[groups["bolsa_kpi"].eq(label)]
+        return row.iloc[0].to_dict() if not row.empty else {}
+
+    summary = {
+        "seb_activacion": row_for("Sebastián activación PM/L-V"),
+        "seb_visita": row_for("Sebastián visita comercial"),
+        "agencia_sabado": row_for("Agencia sábado"),
+        "venta_total_actividades": float(df_eval["venta_dia"].sum()),
+        "uplift_total": float(df_eval["diferencia_vs_referencia"].sum()),
+        "dias_actividad_total": int(df_eval["fecha"].nunique()),
+        "tiendas_total": int(df_eval["tienda_codigo"].nunique()),
+    }
+    top_positive = df_eval.sort_values("diferencia_vs_referencia", ascending=False).head(20)
+    top_negative = df_eval.sort_values("diferencia_vs_referencia", ascending=True).head(20)
+    return {"summary": summary, "groups": groups, "detail": df_eval, "top_positive": top_positive, "top_negative": top_negative}
+
+
+def visit_information_kpis(visits: pd.DataFrame) -> dict[str, pd.DataFrame | dict]:
+    if visits is None or visits.empty:
+        return {"summary": {}, "by_store": pd.DataFrame(), "pending": pd.DataFrame(), "detail": pd.DataFrame()}
+    df = visits.copy()
+    total = len(df)
+    summary = {
+        "visitas_registradas": int(total),
+        "tiendas_visitadas": int(df["tienda_codigo"].replace("", np.nan).nunique()) if "tienda_codigo" in df.columns else int(df["tienda"].nunique()),
+        "completitud_promedio": float(df.get("completitud_pct", pd.Series([0])).mean()),
+        "fichas_alta_calidad": int((df.get("calidad_ficha", pd.Series(dtype=str)) == "Alta").sum()),
+        "fichas_media_calidad": int((df.get("calidad_ficha", pd.Series(dtype=str)) == "Media").sum()),
+        "fichas_baja_calidad": int((df.get("calidad_ficha", pd.Series(dtype=str)) == "Baja").sum()),
+        "quiebres_detectados": int(df.get("quiebres_detectados", pd.Series([0])).sum()),
+        "riesgos_detectados": int(df.get("riesgos_detectados", pd.Series([0])).sum()),
+        "sobrestock_detectado": int(df.get("sobrestock_detectado", pd.Series([0])).sum()),
+        "pendientes": int(df.get("tiene_pendiente", pd.Series([False])).sum()),
+        "con_fotos": int(df.get("tiene_fotos", pd.Series([False])).sum()),
+        "vendedores_clave": int(df.get("tiene_vendedor_clave", pd.Series([False])).sum()),
+        "conoce_magicshine": int(df.get("conoce_magicshine_si", pd.Series([False])).sum()),
+    }
+    group_cols = [c for c in ["tienda_codigo", "tienda", "comuna"] if c in df.columns]
+    by_store = pd.DataFrame()
+    if group_cols:
+        by_store = (
+            df.groupby(group_cols, as_index=False)
+            .agg(
+                visitas=("fecha", "count"),
+                ultima_visita=("fecha", "max"),
+                completitud_promedio=("completitud_pct", "mean"),
+                quiebres=("quiebres_detectados", "sum"),
+                riesgos=("riesgos_detectados", "sum"),
+                sobrestock=("sobrestock_detectado", "sum"),
+                pendientes=("tiene_pendiente", "sum"),
+                con_fotos=("tiene_fotos", "sum"),
+            )
+            .sort_values(["pendientes", "quiebres", "riesgos", "visitas"], ascending=False)
+        )
+    pending = df[df.get("tiene_pendiente", pd.Series([False] * len(df))).astype(bool)].copy()
+    if not pending.empty:
+        pending = pending.sort_values("fecha", ascending=False)
+    return {"summary": summary, "by_store": by_store, "pending": pending, "detail": df}
+
+
+def content_kpis(content: pd.DataFrame) -> dict[str, pd.DataFrame | dict]:
+    if content is None or content.empty:
+        return {"summary": {}, "by_type": pd.DataFrame(), "detail": pd.DataFrame()}
+    df = content.copy()
+    summary = {
+        "piezas": int(len(df)),
+        "tiendas": int(df["tienda"].replace("", np.nan).nunique()) if "tienda" in df.columns else 0,
+        "entregadas": int(df.get("entregado_bool", pd.Series([False] * len(df))).sum()),
+        "aprobadas": int(df.get("aprobado_bool", pd.Series([False] * len(df))).sum()),
+        "aprobacion_pct": safe_div(int(df.get("aprobado_bool", pd.Series([False] * len(df))).sum()), len(df)) * 100,
+    }
+    by_type = pd.DataFrame()
+    if "tipo_contenido" in df.columns:
+        by_type = (
+            df.groupby("tipo_contenido", as_index=False)
+            .agg(piezas=("fecha", "count"), aprobadas=("aprobado_bool", "sum"), entregadas=("entregado_bool", "sum"), tiendas=("tienda", "nunique"))
+            .sort_values("piezas", ascending=False)
+        )
+    return {"summary": summary, "by_type": by_type, "detail": df}
